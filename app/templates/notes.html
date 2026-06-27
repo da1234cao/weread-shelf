@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>笔记</h1>
+<div class="sub">{{ books|length }} 本书有笔记 · 划线与想法</div>
+
+{% if not books %}
+  <div class="empty">还没有笔记数据，点击右上角「立即刷新」。</div>
+{% else %}
+<table class="notes">
+  <thead>
+    <tr><th>书名</th><th>作者</th><th class="num">进度</th><th class="num">划线</th><th class="num">想法</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for b in books %}
+    <tr>
+      <td><a href="/notes/{{ b.book_id }}">{{ b.title or b.book_id }}</a></td>
+      <td>{{ b.author }}</td>
+      <td class="num">{{ b.progress }}%</td>
+      <td class="num">{{ b.note_count }}</td>
+      <td class="num">{{ b.review_count }}</td>
+      <td class="num"><a href="/export/notes/{{ b.book_id }}.md">导出 MD</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

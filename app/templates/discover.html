@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>为你推荐</h1>
+<div class="sub">基于你的阅读偏好 · {{ recs|length }} 本</div>
+
+{% if not recs %}
+  <div class="empty">还没有推荐数据，点击右上角「立即刷新」。</div>
+{% else %}
+<div class="book-grid">
+  {% for r in recs %}
+  <div class="book">
+    {% if r.cover %}<img class="cover" src="{{ r.cover }}" alt="" loading="lazy">{% else %}<div class="cover"></div>{% endif %}
+    <div class="meta">
+      <div class="title">{{ r.title }}</div>
+      <div class="author">{{ r.author }}</div>
+      {% if r.category %}<div style="margin-top:6px"><span class="badge">{{ r.category }}</span></div>{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

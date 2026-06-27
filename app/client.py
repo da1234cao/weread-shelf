@@ -1,0 +1,166 @@
+"""Thin client over the WeRead (微信读书) Agent API Gateway.
+
+All operations hit a single endpoint:
+
+    POST https://i.weread.qq.com/api/agent/gateway
+    Authorization: Bearer wrk-xxxx
+    body: {"api_name": "/path", "skill_version": "1.0.3", ...flat params}
+
+Errors are returned as a JSON body with a non-zero ``errcode`` (often with an
+HTTP status of 499). Reading-duration fields are always in *seconds*.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from typing import Any
+
+import httpx
+
+from .config import Settings, get_settings
+
+logger = logging.getLogger(__name__)
+
+
+class WeReadError(RuntimeError):
+    """A business-level error returned by the gateway (non-zero errcode)."""
+
+    def __init__(self, errcode: int, errmsg: str, api_name: str):
+        self.errcode = errcode
+        self.errmsg = errmsg
+        self.api_name = api_name
+        super().__init__(f"{api_name} failed: errcode={errcode} errmsg={errmsg}")
+
+
+class WeReadAuthError(WeReadError):
+    """Authentication / API-key problem (expired, invalid, or unauthorized)."""
+
+
+# errcodes that indicate the API key is no longer valid.
+_AUTH_ERRCODES = {-2001, -2010, -2012}
+# HTTP statuses worth retrying (transient).
+_RETRY_STATUSES = {429, 500, 502, 503, 504}
+
+
+class WeReadClient:
+    """Synchronous gateway client with retries and polite rate limiting."""
+
+    def __init__(self, settings: Settings | None = None, client: httpx.Client | None = None):
+        self.settings = settings or get_settings()
+        if not self.settings.weread_api_key:
+            raise RuntimeError(
+                "WEREAD_API_KEY is not set. Generate one at "
+                "https://weread.qq.com/r/weread-skills and put it in .env"
+            )
+        self._owns_client = client is None
+        self._client = client or httpx.Client(timeout=self.settings.request_timeout)
+        self._last_call_ts = 0.0
+
+    # -- lifecycle ---------------------------------------------------------
+    def close(self) -> None:
+        if self._owns_client:
+            self._client.close()
+
+    def __enter__(self) -> "WeReadClient":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    # -- core --------------------------------------------------------------
+    def call(self, api_name: str, **params: Any) -> dict[str, Any]:
+        """Invoke a gateway ``api_name`` with flat top-level params."""
+        body = {"api_name": api_name, "skill_version": self.settings.skill_version}
+        # Only include params that were actually provided (drop None).
+        body.update({k: v for k, v in params.items() if v is not None})
+        headers = {
+            "Authorization": f"Bearer {self.settings.weread_api_key}",
+            "Content-Type": "application/json",
+        }
+
+        attempt = 0
+        while True:
+            attempt += 1
+            self._throttle()
+            try:
+                resp = self._client.post(self.settings.weread_base_url, json=body, headers=headers)
+            except httpx.HTTPError as exc:
+                if attempt <= self.settings.max_retries:
+                    self._backoff(attempt, reason=f"network error: {exc}")
+                    continue
+                raise WeReadError(-1, f"network error after retries: {exc}", api_name) from exc
+
+            if resp.status_code in _RETRY_STATUSES and attempt <= self.settings.max_retries:
+                self._backoff(attempt, reason=f"HTTP {resp.status_code}")
+                continue
+
+            data = self._parse(resp, api_name)
+            self._check_errors(data, api_name)
+            return data
+
+    # -- typed helpers -----------------------------------------------------
+    def read_data_detail(self, mode: str | None = None, base_time: int | None = None) -> dict[str, Any]:
+        """Reading statistics. mode in weekly|monthly|annually|overall."""
+        return self.call("/readdata/detail", mode=mode, baseTime=base_time)
+
+    def shelf_sync(self) -> dict[str, Any]:
+        return self.call("/shelf/sync")
+
+    def notebooks(self, count: int = 50, last_sort: int | None = None) -> dict[str, Any]:
+        return self.call("/user/notebooks", count=count, lastSort=last_sort)
+
+    def bookmark_list(self, book_id: str) -> dict[str, Any]:
+        """User's highlights (划线) for a book."""
+        return self.call("/book/bookmarklist", bookId=book_id)
+
+    def my_reviews(self, book_id: str, count: int = 50, synckey: int | None = None) -> dict[str, Any]:
+        """User's own thoughts/notes (想法) for a book. Note: param is `bookid`."""
+        return self.call("/review/list/mine", bookid=book_id, count=count, synckey=synckey)
+
+    def book_info(self, book_id: str) -> dict[str, Any]:
+        return self.call("/book/info", bookId=book_id)
+
+    def book_progress(self, book_id: str) -> dict[str, Any]:
+        return self.call("/book/getprogress", bookId=book_id)
+
+    def recommend(self, count: int = 12, max_idx: int | None = None) -> dict[str, Any]:
+        return self.call("/book/recommend", count=count, maxIdx=max_idx)
+
+    def search(self, keyword: str, count: int = 10) -> dict[str, Any]:
+        return self.call("/store/search", keyword=keyword, count=count)
+
+    # -- internals ---------------------------------------------------------
+    def _throttle(self) -> None:
+        wait = self.settings.request_interval - (time.monotonic() - self._last_call_ts)
+        if wait > 0:
+            time.sleep(wait)
+        self._last_call_ts = time.monotonic()
+
+    def _backoff(self, attempt: int, reason: str) -> None:
+        delay = min(2 ** attempt, 30)
+        logger.warning("gateway retry %d (%s); sleeping %ss", attempt, reason, delay)
+        time.sleep(delay)
+
+    @staticmethod
+    def _parse(resp: httpx.Response, api_name: str) -> dict[str, Any]:
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise WeReadError(
+                resp.status_code, f"non-JSON response: {resp.text[:200]}", api_name
+            ) from exc
+        if not isinstance(data, dict):
+            raise WeReadError(resp.status_code, f"unexpected response type: {type(data)}", api_name)
+        return data
+
+    @staticmethod
+    def _check_errors(data: dict[str, Any], api_name: str) -> None:
+        if data.get("upgrade_info"):
+            logger.warning("gateway requests skill upgrade for %s: %s", api_name, data["upgrade_info"])
+        errcode = data.get("errcode")
+        if errcode is not None and errcode != 0:
+            errmsg = str(data.get("errmsg", ""))
+            if errcode in _AUTH_ERRCODES:
+                raise WeReadAuthError(errcode, errmsg, api_name)
+            raise WeReadError(errcode, errmsg, api_name)

@@ -1,0 +1,15 @@
+services:
+  weread-shelf:
+    build: .
+    image: weread-shelf:latest
+    container_name: weread-shelf
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8765:8765"
+    volumes:
+      - weread_db_data:/data
+
+volumes:
+  weread_db_data:
+    name: weread_db_data

@@ -1,0 +1,201 @@
+"""Daily pull orchestration and historical backfill.
+
+A run is intentionally resilient: a failure fetching one book's notes is logged
+and counted, but does not abort the whole pull.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from typing import Any
+
+from . import repository as repo
+from .client import WeReadClient
+from .db import init_db, session_scope
+from .utils import today_str, tzinfo
+
+logger = logging.getLogger(__name__)
+
+
+def _shelf_archive_map(shelf: dict[str, Any]) -> dict[str, str]:
+    """book_id -> archive(folder) name."""
+    mapping: dict[str, str] = {}
+    for arc in shelf.get("archive", []) or []:
+        name = arc.get("name", "")
+        for bid in arc.get("bookIds", []) or []:
+            mapping[bid] = name
+    return mapping
+
+
+def _chapter_title_map(chapters: list[dict[str, Any]]) -> dict[int, str]:
+    return {int(c["chapterUid"]): c.get("title", "") for c in chapters or [] if "chapterUid" in c}
+
+
+def run_daily_pull(client: WeReadClient | None = None, kind: str = "daily") -> dict[str, int]:
+    """Pull all data and persist it. Returns a counts summary."""
+    init_db()
+    owns = client is None
+    client = client or WeReadClient()
+    counts: dict[str, int] = {
+        "days": 0, "shelf": 0, "books": 0, "bookmarks": 0, "reviews": 0, "recs": 0, "errors": 0,
+    }
+    pull_date = today_str()
+
+    with session_scope() as session:
+        run = repo.start_pull(session, kind)
+        try:
+            # 1) Reading statistics (overall + current month + current week).
+            for mode in ("overall", "monthly", "weekly"):
+                data = client.read_data_detail(mode=mode)
+                repo.save_stat_snapshot(session, pull_date, mode, data)
+                if mode in ("monthly", "weekly"):
+                    counts["days"] += repo.upsert_daily_read_times(session, data.get("readTimes", {}))
+
+            # 2) Shelf.
+            shelf = client.shelf_sync()
+            archive = _shelf_archive_map(shelf)
+            shelf_items = []
+            for b in shelf.get("books", []) or []:
+                bid = b.get("bookId")
+                if not bid:
+                    continue
+                repo.upsert_book(
+                    session, bid,
+                    title=b.get("title"), author=b.get("author"), cover=b.get("cover"),
+                    finished=int(b.get("finishReading", 0) or 0),
+                )
+                shelf_items.append({
+                    "book_id": bid,
+                    "archive_name": archive.get(bid, ""),
+                    "finish_reading": int(b.get("finishReading", 0) or 0),
+                    "secret": int(b.get("secret", 0) or 0),
+                    "update_time": int(b.get("updateTime", 0) or 0),
+                })
+            counts["shelf"] = repo.save_shelf(session, pull_date, shelf_items)
+
+            # 3) Notebooks (paginated) -> per-book counts + metadata.
+            notebook_books = _fetch_all_notebooks(client)
+            counts["books"] = len(notebook_books)
+            for nb in notebook_books:
+                book = nb.get("book", {}) or {}
+                bid = nb.get("bookId") or book.get("bookId")
+                if not bid:
+                    continue
+                category = ""
+                cats = book.get("categories")
+                if isinstance(cats, list) and cats:
+                    category = cats[0].get("title", "") if isinstance(cats[0], dict) else ""
+                repo.upsert_book(
+                    session, bid,
+                    title=book.get("title"), author=book.get("author"), cover=book.get("cover"),
+                    category=category, publisher=book.get("publisher"),
+                    publish_time=book.get("publishTime"), intro=book.get("intro"),
+                    finished=int(book.get("finished", 0) or 0),
+                    reading_progress=int(nb.get("readingProgress", 0) or 0),
+                    note_count=int(nb.get("noteCount", 0) or 0),
+                    bookmark_count=int(nb.get("bookmarkCount", 0) or 0),
+                    review_count=int(nb.get("reviewCount", 0) or 0),
+                )
+                # 4) Highlights (划线) and thoughts (想法) per book.
+                if int(nb.get("noteCount", 0) or 0) > 0:
+                    counts["bookmarks"] += _pull_bookmarks(client, session, bid, counts)
+                if int(nb.get("reviewCount", 0) or 0) > 0:
+                    counts["reviews"] += _pull_reviews(client, session, bid, counts)
+
+            # 5) Recommendations.
+            try:
+                rec = client.recommend(count=12)
+                rec_books = rec.get("books", []) or []
+                for b in rec_books:
+                    if b.get("bookId"):
+                        repo.upsert_book(
+                            session, b["bookId"], title=b.get("title"), author=b.get("author"),
+                            cover=b.get("cover"), category=b.get("category"), intro=b.get("intro"),
+                        )
+                counts["recs"] = repo.save_recommendations(session, pull_date, rec_books)
+            except Exception as exc:  # recommendations are non-essential
+                logger.warning("recommendations failed: %s", exc)
+                counts["errors"] += 1
+
+            repo.finish_pull(session, run, ok=True, counts=counts)
+            logger.info("pull complete: %s", counts)
+        except Exception as exc:
+            logger.exception("pull failed")
+            repo.finish_pull(session, run, ok=False, counts=counts, error=str(exc))
+            raise
+        finally:
+            if owns:
+                client.close()
+    return counts
+
+
+def _fetch_all_notebooks(client: WeReadClient) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    last_sort: int | None = None
+    for _ in range(100):  # safety bound
+        data = client.notebooks(count=50, last_sort=last_sort)
+        books = data.get("books", []) or []
+        out.extend(books)
+        if not books or not data.get("hasMore"):
+            break
+        last_sort = books[-1].get("sort")
+        if last_sort is None:
+            break
+    return out
+
+
+def _pull_bookmarks(client: WeReadClient, session, book_id: str, counts: dict[str, int]) -> int:
+    try:
+        data = client.bookmark_list(book_id)
+    except Exception as exc:
+        logger.warning("bookmarklist failed for %s: %s", book_id, exc)
+        counts["errors"] += 1
+        return 0
+    chapters = _chapter_title_map(data.get("chapters", []))
+    return repo.upsert_bookmarks(
+        session, data.get("updated", []), data.get("removed", []), chapters
+    )
+
+
+def _pull_reviews(client: WeReadClient, session, book_id: str, counts: dict[str, int]) -> int:
+    try:
+        data = client.my_reviews(book_id, count=100)
+    except Exception as exc:
+        logger.warning("review/list/mine failed for %s: %s", book_id, exc)
+        counts["errors"] += 1
+        return 0
+    # Each item nests the actual review under "review".
+    reviews = [item.get("review", item) for item in data.get("reviews", []) or []]
+    return repo.upsert_reviews(session, reviews)
+
+
+def backfill_history(months: int = 13, client: WeReadClient | None = None) -> dict[str, int]:
+    """Seed the daily time series with the last `months` months of per-day data.
+
+    Calls /readdata/detail mode=monthly with a baseTime inside each past month;
+    the server normalizes baseTime to the period start.
+    """
+    init_db()
+    owns = client is None
+    client = client or WeReadClient()
+    total_days = 0
+    now = datetime.now(tzinfo())
+    try:
+        with session_scope() as session:
+            run = repo.start_pull(session, "backfill")
+            year, month = now.year, now.month
+            for _ in range(months):
+                base = datetime(year, month, 1, 12, 0, 0, tzinfo=tzinfo())
+                data = client.read_data_detail(mode="monthly", base_time=int(base.timestamp()))
+                added = repo.upsert_daily_read_times(session, data.get("readTimes", {}))
+                total_days += added
+                logger.info("backfilled %s-%02d: %d days", year, month, added)
+                month -= 1
+                if month == 0:
+                    month, year = 12, year - 1
+            repo.finish_pull(session, run, ok=True, counts={"days": total_days})
+    finally:
+        if owns:
+            client.close()
+    return {"days": total_days}

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>书架</h1>
+<div class="sub">
+  {% if shelf.pull_date %}共 {{ shelf.total }} 本 · 快照日期 {{ shelf.pull_date }}{% else %}暂无数据{% endif %}
+</div>
+
+{% if not shelf.groups %}
+  <div class="empty">书架还没有数据，点击右上角「立即刷新」。</div>
+{% endif %}
+
+{% for group in shelf.groups %}
+<div class="folder-title">{{ group.name }} <span class="count">{{ group.books|length }} 本</span></div>
+<div class="book-grid">
+  {% for b in group.books %}
+  <div class="book">
+    {% if b.cover %}<img class="cover" src="{{ b.cover }}" alt="" loading="lazy">{% else %}<div class="cover"></div>{% endif %}
+    <div class="meta">
+      <div class="title">{{ b.title }}</div>
+      <div class="author">{{ b.author }}</div>
+      {% if b.finished %}
+        <div style="margin-top:6px"><span class="badge">已读完</span></div>
+      {% elif b.progress %}
+        <div class="progress"><div style="width: {{ b.progress }}%"></div></div>
+        <div class="author" style="margin-top:3px">{{ b.progress }}%</div>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endfor %}
+{% endblock %}

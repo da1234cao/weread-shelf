@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}微信读书数据看板{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="inner">
+      <div class="brand">微信读书<span>·看板</span></div>
+      <nav class="tabs">
+        <a href="/" class="{{ 'active' if active == 'overview' }}">概览</a>
+        <a href="/shelf" class="{{ 'active' if active == 'shelf' }}">书架</a>
+        <a href="/notes" class="{{ 'active' if active == 'notes' }}">笔记</a>
+        <a href="/discover" class="{{ 'active' if active == 'discover' }}">发现</a>
+      </nav>
+      <button class="refresh-btn" onclick="refreshNow(this)">立即刷新</button>
+    </div>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <div class="toast" id="toast"></div>
+  <script>
+    function toast(msg) {
+      const t = document.getElementById('toast');
+      t.textContent = msg; t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 2600);
+    }
+    async function refreshNow(btn) {
+      btn.disabled = true; const old = btn.textContent; btn.textContent = '刷新中…';
+      try {
+        const r = await fetch('/api/refresh', { method: 'POST' });
+        const d = await r.json();
+        toast(d.status === 'started' ? '已开始后台拉取，稍后刷新页面查看' :
+              d.status === 'already_running' ? '已有拉取任务在进行中' : ('刷新：' + d.status));
+      } catch (e) { toast('刷新失败：' + e); }
+      finally { btn.disabled = false; btn.textContent = old; }
+    }
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

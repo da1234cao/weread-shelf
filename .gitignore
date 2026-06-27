@@ -1,0 +1,16 @@
+# Secrets — never commit your API key
+.env
+
+# Local data
+data/
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+build/
+dist/
