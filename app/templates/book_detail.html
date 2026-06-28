@@ -15,6 +15,7 @@
       {% elif book and book.reading_progress %}<span class="badge">进度 {{ book.reading_progress }}%</span>{% endif %}
       <span>划线 {{ bookmark_count }}</span>
       <span>想法 {{ review_count }}</span>
+      <span>书评 {{ book_review_count }}</span>
       {% if book %}<a href="/export/notes/{{ book.book_id }}.md">导出 Markdown</a>{% endif %}
     </div>
   </div>
@@ -24,6 +25,7 @@
   <button class="subtab active" data-tab="info" onclick="showTab(this)">信息</button>
   <button class="subtab" data-tab="marks" onclick="showTab(this)">划线 {{ bookmark_count }}</button>
   <button class="subtab" data-tab="thoughts" onclick="showTab(this)">想法 {{ review_count }}</button>
+  <button class="subtab" data-tab="reviews" onclick="showTab(this)">书评 {{ book_review_count }}</button>
 </div>
 
 <section class="tabpane" data-pane="info">
@@ -54,36 +56,37 @@
 </section>
 
 <section class="tabpane" data-pane="marks" hidden>
-  {% set ns = namespace(any=false) %}
-  {% for ch in chapters %}
-    {% if ch.bookmarks %}
-      {% set ns.any = true %}
-      <div class="chapter">
-        <h3>{{ ch.title or '未命名章节' }}</h3>
-        {% for bm in ch.bookmarks %}<div class="mark">{{ bm.mark_text }}</div>{% endfor %}
-      </div>
-    {% endif %}
+  {% for ch in chapters if ch.bookmarks %}
+    <div class="chapter">
+      <h3>{{ ch.title or '未命名章节' }}</h3>
+      {% for bm in ch.bookmarks %}<div class="mark">{{ bm.mark_text }}</div>{% endfor %}
+    </div>
   {% endfor %}
-  {% if not ns.any %}<div class="empty">这本书还没有同步到划线。</div>{% endif %}
+  {% if not bookmark_count %}<div class="empty">这本书还没有同步到划线。</div>{% endif %}
 </section>
 
 <section class="tabpane" data-pane="thoughts" hidden>
-  {% set ns2 = namespace(any=false) %}
-  {% for ch in chapters %}
-    {% if ch.reviews %}
-      {% set ns2.any = true %}
-      <div class="chapter">
-        <h3>{{ ch.title or '未命名章节' }}</h3>
-        {% for rv in ch.reviews %}
-          <div class="thought">
-            {% if rv.abstract %}<div class="quote">{{ rv.abstract }}</div>{% endif %}
-            <div class="body">💭 {{ rv.content }}</div>
-          </div>
-        {% endfor %}
-      </div>
-    {% endif %}
+  {% for ch in chapters if ch.reviews %}
+    <div class="chapter">
+      <h3>{{ ch.title or '未命名章节' }}</h3>
+      {% for rv in ch.reviews %}
+        <div class="thought">
+          {% if rv.abstract %}<div class="quote">{{ rv.abstract }}</div>{% endif %}
+          <div class="body">💭 {{ rv.content }}</div>
+        </div>
+      {% endfor %}
+    </div>
   {% endfor %}
-  {% if not ns2.any %}<div class="empty">这本书还没有同步到想法。</div>{% endif %}
+  {% if not review_count %}<div class="empty">这本书还没有同步到想法。</div>{% endif %}
+</section>
+
+<section class="tabpane" data-pane="reviews" hidden>
+  {% for rv in book_reviews %}
+    <div class="thought">
+      <div class="body">{{ rv.content }}</div>
+    </div>
+  {% endfor %}
+  {% if not book_reviews %}<div class="empty">这本书还没有写书评。</div>{% endif %}
 </section>
 {% endblock %}
 

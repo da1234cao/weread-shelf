@@ -67,10 +67,11 @@ class Book(SQLModel, table=True):
     publish_time: str = ""
     isbn: str = ""
     finished: int = 0
-    # Per-book reading state (from notebooks / getprogress).
+    # Per-book counts from /user/notebooks. note_count is the 划线 (highlight)
+    # count; review_count covers 想法 + 书评. (The API's bookmarkCount is always 0,
+    # so it isn't stored — the real highlight total lives in note_count.)
     reading_progress: int = 0
     note_count: int = 0
-    bookmark_count: int = 0
     review_count: int = 0
     # Whether /book/info has already enriched the metadata (lazy, write-once).
     info_fetched: int = 0
@@ -112,7 +113,8 @@ class Bookmark(SQLModel, table=True):
 
 
 class Review(SQLModel, table=True):
-    """A personal thought/note (想法) — abstract is the quoted text."""
+    """A personal review. chapter_uid>0 is a passage thought (想法, abstract = the
+    quoted text); chapter_uid==0 is a whole-book review (书评)."""
 
     __tablename__ = "review"
 

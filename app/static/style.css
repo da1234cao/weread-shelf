@@ -130,8 +130,8 @@ form label.check input { width: auto; margin: 0; }
 .btn-primary:hover { filter: brightness(1.05); }
 .btn-danger { color: #c0392b; background: #fff; border: 1px solid var(--border); padding: 6px 12px; border-radius: 8px; cursor: pointer; }
 .inline-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.inline-form input { margin: 0; }
-.inline-form button { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); background: #fff; cursor: pointer; }
+.inline-form input[type=text], .inline-form input[type=password] { display: inline-block; width: auto; max-width: none; margin: 0; flex: 1 1 150px; }
+.inline-form button:not(.btn-primary) { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); background: #fff; cursor: pointer; }
 .notice { padding: 10px 14px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); margin-bottom: 16px; font-size: 14px; }
 .notice-bad { background: #fdecea; color: #c0392b; }
 .form-error { color: #c0392b; font-size: 14px; margin-bottom: 12px; }

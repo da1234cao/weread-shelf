@@ -7,7 +7,7 @@ import copy
 from app import repository as repo
 from app.db import session_scope
 from app.fetcher import run_daily_pull
-from app.models import Book, Bookmark
+from app.models import Book, Bookmark, Review
 
 from . import fixtures as fx
 
@@ -187,3 +187,23 @@ def test_chapters_refetched_when_shelf_reports_update():
         assert len(toc) == 5
         assert toc[-1].title == "第五章"
         assert s.get(Book, "b2").chapters_update_time == 300
+
+
+def test_book_review_split_from_thoughts():
+    """A chapter-less review (chapter_uid==0) is a 书评, kept out of the chapter
+    grouping and counted separately on both the detail and list pages."""
+    run_daily_pull(client=FakeClient())  # b2 gets one chapter thought (rv1, chapter 28)
+    with session_scope() as s:
+        s.add(Review(review_id="rv_book", book_id="b2", chapter_uid=0,
+                     content="整本书的评价", type=4, create_time=1781616300))
+        s.commit()
+
+        detail = repo.book_notes(s, "b2")
+        assert detail["review_count"] == 1  # 想法: only the chapter-bound rv1
+        assert detail["book_review_count"] == 1  # 书评: the chapter-less one
+        assert [rv.review_id for rv in detail["book_reviews"]] == ["rv_book"]
+        # The book review must not create an empty "未命名章节" chapter group.
+        assert all(ch["title"] for ch in detail["chapters"])
+
+        row = next(b for b in repo.books_with_notes(s) if b["book_id"] == "b2")
+        assert row["review_count"] == 1 and row["book_review_count"] == 1

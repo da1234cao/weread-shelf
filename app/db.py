@@ -48,9 +48,10 @@ def _migrate(engine) -> None:
             conn.exec_driver_sql("ALTER TABLE book ADD COLUMN info_fetched INTEGER NOT NULL DEFAULT 0")
         if book_cols and "chapters_update_time" not in book_cols:
             conn.exec_driver_sql("ALTER TABLE book ADD COLUMN chapters_update_time INTEGER NOT NULL DEFAULT 0")
-        # The rating/rating_count columns were dropped (public, non-personal data).
-        # Remove them so ORM inserts that omit them don't hit a NOT NULL constraint.
-        for col in ("rating", "rating_count"):
+        # Columns dropped from the model (public/dead data). Remove them so ORM
+        # inserts that omit them don't hit a NOT NULL constraint. bookmark_count was
+        # always 0 (the API's bookmarkCount is unused); 划线 lives in note_count.
+        for col in ("rating", "rating_count", "bookmark_count"):
             if col in book_cols:
                 conn.exec_driver_sql(f"ALTER TABLE book DROP COLUMN {col}")
 

@@ -46,7 +46,7 @@ python cli.py probe /readdata/detail -p mode=overall   # 调试单个接口
 | 2 | `/shelf/sync` | 书架列表 | 是 | ✅ |
 | 3 | `/user/notebooks` | 有笔记的书籍清单（概览） | 是 | ✅ |
 | 4 | `/book/bookmarklist` | 个人划线列表 | 是 | ✅ |
-| 5 | `/review/list/mine` | 个人想法/笔记 | 是 | ✅ |
+| 5 | `/review/list/mine` | 个人想法 + 书评（按 `type` 区分） | 是 | ✅ |
 | 6 | `/book/recommend` | 个性化推荐书 | 是 | ✅ |
 | 7 | `/book/info` | 书籍基本信息 | 否 | ✅ |
 | 8 | `/book/chapterinfo` | 书籍章节目录 | 否 | ✅ |
@@ -157,7 +157,7 @@ python cli.py probe /readdata/detail -p mode=overall   # 调试单个接口
 
 ---
 
-## 三、个人笔记（划线 + 想法）
+## 三、个人笔记（划线 + 想法 + 书评）
 
 ### 3. `/user/notebooks` ✅
 获取用户所有有笔记的书籍列表（笔记本概览）。游标分页。
@@ -169,10 +169,11 @@ python cli.py probe /readdata/detail -p mode=overall   # 调试单个接口
 
 **返回字段**：`synckey`、`totalBookCount`、`totalNoteCount`、`noBookReviewCount`、`hasMore`、
 `books`（每本含 `book` 元数据、`readingProgress`、`noteCount`、`bookmarkCount`、`reviewCount`、`sort`）。
+其中 **`noteCount` 才是划线总数；`bookmarkCount` 实测恒为 0**（不要用它），`reviewCount` 含想法 + 书评。
 
 > 本项目用法：主同步第三步。按 `count=50` + `lastSort` 游标翻页拉全（安全上限 100 页），
-> 每本写入 `readingProgress/noteCount/bookmarkCount/reviewCount` 计数；再据计数决定是否逐本拉划线（`noteCount>0`）
-> 与想法（`reviewCount>0`），从而避免对无笔记的书做多余请求。
+> 每本写入 `readingProgress/noteCount/reviewCount` 计数（`bookmarkCount` 恒 0，不存）；再据计数决定是否逐本拉划线
+> （`noteCount>0`）与想法/书评（`reviewCount>0`），从而避免对无笔记的书做多余请求。
 
 ### 4. `/book/bookmarklist` ✅
 获取用户对某本书的划线列表（不含书签）。
@@ -188,7 +189,8 @@ python cli.py probe /readdata/detail -p mode=overall   # 调试单个接口
 > 映射成章节标题随划线一起入库，`updated` upsert、`removed` 删除。
 
 ### 5. `/review/list/mine` ✅
-获取用户在某本书上的个人想法/笔记。**注意参数是小写 `bookid`。**
+获取用户在某本书上写的**全部个人评论**——既包含挂在段落上的「想法」，也包含对整本书的「书评」，
+二者由 `type` 字段区分（见下）。**注意参数是小写 `bookid`。**
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |------|------|:----:|------|------|
@@ -196,11 +198,28 @@ python cli.py probe /readdata/detail -p mode=overall   # 调试单个接口
 | `synckey` | int | 否 | `0` | 翻页游标 |
 | `count` | int | 否 | `20` | 每页数量 |
 
-**返回字段**：`reviews`（每项把想法嵌在 `review` 下，含 `content`/`abstract`/`chapterUid`/
-`chapterTitle`/`range`/`type`/`isPrivate`/`createTime`）、`totalCount`、`hasMore`、`synckey`、`removed`。
+**顶层返回字段**：`reviews`、`totalCount`、`hasMore`、`synckey`、`removed`。
+其中 `reviews` 数组的每一项是 `{reviewId, review}` 容器，真正的内容嵌在 **`review`** 子对象里。
 
-> 本项目用法：仅当某书 `reviewCount>0` 时按 `count=100` 拉取；入库前需把每项的 `review` 子对象取出
-> （列表项本身是包了一层的容器）。
+**`review` 子对象按 `type` 分两类**（同一接口一并返回，需自行按 `type` 拆分）：
+
+| `type` | 含义 | 是否挂章节 | 关键字段 |
+|:------:|------|:----------:|----------|
+| `1` | **段落想法**（在某句划线上写的批注） | 是 | `chapterUid`>0、`chapterIdx`、`chapterTitle`（与 `chapterName` 同值）、`abstract`（被划的原文）、`contextAbstract`（上下文）、`range`（字符区间）、`content`（想法正文）、`isPrivate` |
+| `4` | **整本书书评**（读完后对全书的评价） | 否 | `chapterUid`==0、**无** `chapterTitle`/`chapterIdx`/`abstract`/`range`；独有 `star`（评分）、`newRatingLevel`（评级）、`isFinish`（是否读完后所写）、`htmlContent`（富文本正文）、`isDeepV` |
+
+两类共有字段：`reviewId`、`bookId`、`content`、`htmlContent`、`type`、`createTime`、`book`、`author`、`isLike`、`topics`。
+
+> **实测分布**（2026-06-28，本人账号）：482 条评论 = 459 条 `type=1` 段落想法 + 23 条 `type=4` 书评。
+> 所有 `type=4` 均为 `chapterUid=0` 且无章节名——这正是若不按 `type` 拆分、书评会被归并进「未命名章节」桶的根因。
+
+> 本项目用法：仅当某书 `reviewCount>0` 时按 `count=100` 拉取；入库前先把每项的 `review` 子对象取出
+> （列表项本身是包了一层的容器），再做分桶归类。
+>
+> **分桶判据：`chapter_uid == 0` → 书评桶，其余 → 想法（按章节归并）。**
+> 不用 `type==4` 而用 `chapter_uid==0` 作判据，是因为它一举两得：既把整本书书评单独拎出来，
+> 又顺带根除了「未命名章节」空桶（该空桶本质就是无章节的评论堆出来的）。书评的语义标签仍对应
+> `type==4`，但即便将来冒出未知 `type`，只要它无章节就不会污染想法的章节列表。
 
 ---
 

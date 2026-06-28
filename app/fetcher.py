@@ -151,7 +151,6 @@ def _run_main_pull(client: WeReadClient, kind: str, pull_date: str, counts: dict
                     finished=finish_map.get(bid, 0),
                     reading_progress=int(nb.get("readingProgress", 0) or 0),
                     note_count=int(nb.get("noteCount", 0) or 0),
-                    bookmark_count=int(nb.get("bookmarkCount", 0) or 0),
                     review_count=int(nb.get("reviewCount", 0) or 0),
                 )
                 # 4) Highlights (划线) and thoughts (想法) per book.

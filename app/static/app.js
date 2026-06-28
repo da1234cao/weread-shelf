@@ -24,10 +24,11 @@ async function main() {
   const cats = (data.preferCategory || []).slice(0, 8);
   doughnut('categoryChart', cats.map(c => c.categoryTitle), cats.map(c => c.readingTime));
 
-  // 24h distribution (line). API note: index 0 corresponds to 6:00.
+  // 24h distribution (line). API note: index 0 corresponds to 6:00; values are seconds.
   const pt = data.preferTime || [];
   const hours = pt.map((_, i) => ((i + 6) % 24) + ':00');
-  line('hourChart', hours, pt, '阅读秒数');
+  const ptMinutes = pt.map(s => Math.round((s / 60) * 10) / 10);
+  line('hourChart', hours, ptMinutes, '阅读分钟');
 
   // Preferred authors (tags).
   const at = document.getElementById('authorTags');
@@ -59,7 +60,8 @@ function line(id, labels, values, label) {
     type: 'line',
     data: { labels, datasets: [{ label, data: values, borderColor: ACCENT,
       backgroundColor: 'rgba(47,125,58,.12)', fill: true, tension: .35, pointRadius: 0 }] },
-    options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+    options: { plugins: { legend: { display: false } },
+      scales: { y: { beginAtZero: true, title: { display: true, text: label } } } }
   });
 }
 

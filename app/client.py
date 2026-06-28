@@ -129,7 +129,8 @@ class WeReadClient:
         return self.call("/book/bookmarklist", bookId=book_id)
 
     def my_reviews(self, book_id: str, count: int = 50, synckey: int | None = None) -> dict[str, Any]:
-        """User's own thoughts/notes (想法) for a book. Note: param is `bookid`."""
+        """User's own reviews for a book — passage thoughts (想法) and the whole-book
+        review (书评), distinguished by each item's chapterUid. Note: param is `bookid`."""
         return self.call("/review/list/mine", bookid=book_id, count=count, synckey=synckey)
 
     def recommend(self, count: int = 12, max_idx: int | None = None) -> dict[str, Any]:

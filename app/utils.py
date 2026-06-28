@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
 
@@ -19,6 +19,25 @@ def today_str() -> str:
 def ts_to_date(ts: int) -> str:
     """Convert an epoch second to a YYYY-MM-DD label in the configured tz."""
     return datetime.fromtimestamp(int(ts), tzinfo()).strftime("%Y-%m-%d")
+
+
+def to_local(dt: datetime | None) -> datetime | None:
+    """Convert a UTC datetime to the configured tz.
+
+    Stored timestamps come back from SQLite naive (tzinfo stripped) but represent
+    UTC, so a naive input is assumed UTC; an aware input is converted as-is.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(tzinfo())
+
+
+def fmt_local(dt: datetime | None, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """Format a UTC datetime as wall-clock time in the configured tz."""
+    local = to_local(dt)
+    return local.strftime(fmt) if local else ""
 
 
 def fmt_duration(seconds: int | None) -> str:

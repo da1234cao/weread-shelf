@@ -22,7 +22,7 @@ from .client import WeReadClient
 from .db import init_db, session_scope
 from .models import AppUser
 from .scheduler import reschedule, shutdown_scheduler, start_scheduler
-from .utils import fmt_duration
+from .utils import fmt_duration, fmt_local
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -30,6 +30,18 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 templates.env.filters["duration"] = fmt_duration
+templates.env.filters["localtime"] = fmt_local
+
+# Curated timezone choices for the admin dropdown; the user's current value is
+# always added on top of this so a custom zone is never lost.
+COMMON_TIMEZONES = [
+    "UTC",
+    "Asia/Shanghai", "Asia/Hong_Kong", "Asia/Taipei", "Asia/Tokyo", "Asia/Seoul",
+    "Asia/Singapore", "Asia/Bangkok", "Asia/Kolkata", "Asia/Dubai",
+    "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Moscow",
+    "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+    "Australia/Sydney", "Pacific/Auckland",
+]
 
 # Paths reachable without authentication even when "require login" is on.
 _PUBLIC_PREFIXES = ("/login", "/logout", "/static", "/api/health", "/favicon.ico")
@@ -102,6 +114,7 @@ def _render(request: Request, name: str, **ctx):
     base = {
         "nav": {"show_overview": s.show_overview, "show_discover": s.show_discover},
         "cur_user": _current(request),
+        "tz": s.timezone,
     }
     return templates.TemplateResponse(request, name, {**base, **ctx})
 
@@ -215,11 +228,12 @@ def admin_home(request: Request):
         users = repo.list_users(session)
         last = repo.last_pull(session)
     upgrade = bool(s.suggested_skill_version and s.suggested_skill_version != s.skill_version)
+    timezones = COMMON_TIMEZONES if s.timezone in COMMON_TIMEZONES else [s.timezone, *COMMON_TIMEZONES]
     return _render(
         request, "admin.html",
         s=s, users=users, last_pull=last, upgrade_available=upgrade,
         must_change=user.must_change, saved=request.query_params.get("saved"),
-        has_key=bool(s.api_key),
+        has_key=bool(s.api_key), timezones=timezones,
     )
 
 
@@ -383,6 +397,12 @@ def export_notes_md(book_id: str):
             if rv.abstract:
                 lines.append(f"> {rv.abstract}")
             lines.append(f"💭 {rv.content}")
+            lines.append("")
+    if data["book_reviews"]:
+        lines.append("## 书评")
+        lines.append("")
+        for rv in data["book_reviews"]:
+            lines.append(rv.content)
             lines.append("")
     return "\n".join(lines)
 

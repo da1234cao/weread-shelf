@@ -57,7 +57,11 @@
           {% for h in [6, 12, 24] %}<option value="{{ h }}" {{ 'selected' if s.pull_interval_hours == h }}>每 {{ h }} 小时</option>{% endfor %}
         </select>
       </label>
-      <label>时区<input type="text" name="timezone" value="{{ s.timezone }}"></label>
+      <label>时区
+        <select name="timezone">
+          {% for z in timezones %}<option value="{{ z }}" {{ 'selected' if s.timezone == z }}>{{ z }}</option>{% endfor %}
+        </select>
+      </label>
       <label>skill_version<input type="text" name="skill_version" value="{{ s.skill_version }}"></label>
       <button type="submit" class="btn-primary">保存设置</button>
     </form>
@@ -67,7 +71,7 @@
     <h2>拉取状态</h2>
     <p class="sub">
       {% if last_pull %}
-        上次成功拉取：{{ last_pull.finished_at.strftime('%Y-%m-%d %H:%M') if last_pull.finished_at }} UTC（{{ last_pull.kind }}）
+        上次成功拉取：{{ last_pull.finished_at | localtime }} {{ s.timezone }}（{{ last_pull.kind }}）
       {% else %}还没有成功拉取记录。{% endif %}
     </p>
     <button class="btn-primary" onclick="refreshNow(this)">立即刷新</button>

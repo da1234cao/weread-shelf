@@ -371,9 +371,17 @@ def current_shelf(session: Session) -> dict[str, Any]:
 
 def books_with_notes(session: Session) -> list[dict[str, Any]]:
     books = session.exec(select(Book)).all()
+    # Split our stored reviews per book into 想法 (has a chapter) and 书评 (no
+    # chapter), so each row's counts agree with that book's detail page. WeRead's
+    # aggregate reviewCount is kept only to decide whether a book has any notes.
+    thought_counts: dict[str, int] = defaultdict(int)
+    book_review_counts: dict[str, int] = defaultdict(int)
+    for bid, chapter_uid in session.exec(select(Review.book_id, Review.chapter_uid)).all():
+        bucket = book_review_counts if chapter_uid == 0 else thought_counts
+        bucket[bid] += 1
     out = []
     for b in books:
-        total = b.note_count + b.bookmark_count + b.review_count
+        total = b.note_count + b.review_count
         if total <= 0:
             continue
         out.append(
@@ -384,8 +392,8 @@ def books_with_notes(session: Session) -> list[dict[str, Any]]:
                 "cover": b.cover,
                 "progress": b.reading_progress,
                 "note_count": b.note_count,
-                "bookmark_count": b.bookmark_count,
-                "review_count": b.review_count,
+                "review_count": thought_counts[b.book_id],
+                "book_review_count": book_review_counts[b.book_id],
                 "total": total,
             }
         )
@@ -402,6 +410,14 @@ def book_notes(session: Session, book_id: str) -> dict[str, Any]:
     bookmarks.sort(key=lambda b: (b.chapter_idx, b.range))
     reviews.sort(key=lambda r: (r.chapter_idx, r.create_time))
 
+    # A review with no chapter (chapter_uid == 0) is a whole-book review (书评);
+    # the rest are passage thoughts (想法) that belong under a chapter. Splitting
+    # on chapter_uid here both pulls book reviews into their own bucket and keeps
+    # the chapter grouping below from ever producing an empty "未命名章节" group.
+    book_reviews = [rv for rv in reviews if rv.chapter_uid == 0]
+    thoughts = [rv for rv in reviews if rv.chapter_uid != 0]
+    book_reviews.sort(key=lambda r: r.create_time, reverse=True)
+
     chapters: dict[int, dict[str, Any]] = {}
     for bm in bookmarks:
         ch = chapters.setdefault(
@@ -409,14 +425,21 @@ def book_notes(session: Session, book_id: str) -> dict[str, Any]:
             {"title": bm.chapter_title, "idx": bm.chapter_idx, "bookmarks": [], "reviews": []},
         )
         ch["bookmarks"].append(bm)
-    for rv in reviews:
+    for rv in thoughts:
         ch = chapters.setdefault(
             rv.chapter_uid,
             {"title": rv.chapter_title, "idx": rv.chapter_idx, "bookmarks": [], "reviews": []},
         )
         ch["reviews"].append(rv)
     ordered = sorted(chapters.values(), key=lambda c: c["idx"])
-    return {"book": book, "chapters": ordered, "bookmark_count": len(bookmarks), "review_count": len(reviews)}
+    return {
+        "book": book,
+        "chapters": ordered,
+        "book_reviews": book_reviews,
+        "bookmark_count": len(bookmarks),
+        "review_count": len(thoughts),
+        "book_review_count": len(book_reviews),
+    }
 
 
 def book_chapters(session: Session, book_id: str) -> list[Chapter]:
