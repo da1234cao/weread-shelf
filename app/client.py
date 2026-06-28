@@ -136,8 +136,12 @@ class WeReadClient:
         return self.call("/book/recommend", count=count, maxIdx=max_idx)
 
     def book_info(self, book_id: str) -> dict[str, Any]:
-        """Public book metadata (intro/category/publisher/rating)."""
+        """Public book metadata (intro/category/publisher/isbn)."""
         return self.call("/book/info", bookId=book_id)
+
+    def chapter_info(self, book_id: str) -> dict[str, Any]:
+        """Public table of contents (chapter list) for a book."""
+        return self.call("/book/chapterinfo", bookId=book_id)
 
     # -- internals ---------------------------------------------------------
     def _throttle(self) -> None:

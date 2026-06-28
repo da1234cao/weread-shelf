@@ -46,6 +46,13 @@ def _migrate(engine) -> None:
         book_cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(book)")}
         if book_cols and "info_fetched" not in book_cols:
             conn.exec_driver_sql("ALTER TABLE book ADD COLUMN info_fetched INTEGER NOT NULL DEFAULT 0")
+        if book_cols and "chapters_update_time" not in book_cols:
+            conn.exec_driver_sql("ALTER TABLE book ADD COLUMN chapters_update_time INTEGER NOT NULL DEFAULT 0")
+        # The rating/rating_count columns were dropped (public, non-personal data).
+        # Remove them so ORM inserts that omit them don't hit a NOT NULL constraint.
+        for col in ("rating", "rating_count"):
+            if col in book_cols:
+                conn.exec_driver_sql(f"ALTER TABLE book DROP COLUMN {col}")
 
 
 @contextmanager

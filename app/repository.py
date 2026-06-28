@@ -17,6 +17,7 @@ from .models import (
     AppUser,
     Book,
     Bookmark,
+    Chapter,
     DailyReadTime,
     PullRun,
     Recommendation,
@@ -161,6 +162,68 @@ def upsert_reviews(session: Session, reviews: list[dict[str, Any]]) -> int:
         row.is_private = int(rv.get("isPrivate", 0) or 0)
         row.create_time = int(rv.get("createTime", 0) or 0)
         session.add(row)
+        n += 1
+    return n
+
+
+def book_ids_needing_info(session: Session) -> list[str]:
+    """book_ids whose /book/info metadata hasn't been fetched yet (write-once)."""
+    return list(session.exec(select(Book.book_id).where(Book.info_fetched == 0)).all())
+
+
+def _latest_shelf_update_times(session: Session) -> dict[str, int]:
+    """Per-book `updateTime` from the most recent shelf snapshot.
+
+    The shelf's updateTime equals a book's chapterUpdateTime, so it tells us — for
+    free, no extra call — when a book's chapters changed since our last TOC fetch.
+    """
+    latest = session.exec(
+        select(ShelfItem.pull_date).order_by(ShelfItem.pull_date.desc())
+    ).first()
+    if not latest:
+        return {}
+    items = session.exec(select(ShelfItem).where(ShelfItem.pull_date == latest)).all()
+    return {it.book_id: it.update_time for it in items}
+
+
+def book_chapter_fetch_targets(session: Session) -> list[str]:
+    """book_ids whose table of contents should be (re)fetched.
+
+    Fetched when never fetched (``chapters_update_time == 0``) or when the shelf
+    reports a newer ``updateTime`` than our last fetch — so completed books are
+    fetched once and serialized books refresh exactly when new chapters land.
+    """
+    shelf_upd = _latest_shelf_update_times(session)
+    targets: list[str] = []
+    for book in session.exec(select(Book)).all():
+        if book.chapters_update_time == 0:
+            targets.append(book.book_id)
+        else:
+            upd = shelf_upd.get(book.book_id)
+            if upd is not None and upd > book.chapters_update_time:
+                targets.append(book.book_id)
+    return targets
+
+
+def replace_chapters(session: Session, book_id: str, chapters: list[dict[str, Any]]) -> int:
+    """Replace a book's stored table of contents with a fresh chapter list."""
+    session.exec(delete(Chapter).where(Chapter.book_id == book_id))
+    n = 0
+    for ch in chapters or []:
+        uid = ch.get("chapterUid")
+        if uid is None:
+            continue
+        session.add(
+            Chapter(
+                book_id=book_id,
+                chapter_uid=int(uid),
+                chapter_idx=int(ch.get("chapterIdx", 0) or 0),
+                title=ch.get("title", "") or "",
+                level=max(int(ch.get("level", 1) or 1), 1),
+                word_count=int(ch.get("wordCount", 0) or 0),
+                update_time=int(ch.get("updateTime", 0) or 0),
+            )
+        )
         n += 1
     return n
 
@@ -354,6 +417,12 @@ def book_notes(session: Session, book_id: str) -> dict[str, Any]:
     return {"book": book, "chapters": ordered, "bookmark_count": len(bookmarks), "review_count": len(reviews)}
 
 
+def book_chapters(session: Session, book_id: str) -> list[Chapter]:
+    """A book's full table of contents, in reading order (empty if not fetched)."""
+    rows = session.exec(select(Chapter).where(Chapter.book_id == book_id)).all()
+    return sorted(rows, key=lambda c: c.chapter_idx)
+
+
 def current_recommendations(session: Session) -> list[Recommendation]:
     latest = session.exec(
         select(Recommendation.pull_date).order_by(Recommendation.pull_date.desc())
@@ -369,6 +438,11 @@ def last_pull(session: Session) -> PullRun | None:
     return session.exec(
         select(PullRun).where(PullRun.ok == True).order_by(PullRun.finished_at.desc())  # noqa: E712
     ).first()
+
+
+def latest_pull(session: Session) -> PullRun | None:
+    """Most recent run regardless of outcome — used to report refresh progress."""
+    return session.exec(select(PullRun).order_by(PullRun.id.desc())).first()
 
 
 # --------------------------------------------------------------------------

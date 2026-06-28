@@ -29,18 +29,100 @@
     function toast(msg) {
       const t = document.getElementById('toast');
       t.textContent = msg; t.classList.add('show');
-      setTimeout(() => t.classList.remove('show'), 2600);
+      setTimeout(() => t.classList.remove('show'), 3200);
     }
+
+    const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+    const COUNT_LABELS = { shelf: '书架', books: '书籍', bookmarks: '划线',
+                           reviews: '想法', recs: '推荐', chapters: '章节', days: '天数' };
+
+    function countsSummary(counts) {
+      if (!counts) return '';
+      const parts = [];
+      for (const k in COUNT_LABELS) if (counts[k]) parts.push(COUNT_LABELS[k] + ' ' + counts[k]);
+      if (counts.errors) parts.push('错误 ' + counts.errors);
+      return parts.length ? '：' + parts.join('，') : '';
+    }
+
+    async function getStatus() {
+      const r = await fetch('/api/refresh/status', { headers: { Accept: 'application/json' } });
+      if (!r.ok) throw new Error('status ' + r.status);
+      return r.json();  // throws if a login page (HTML) comes back — caller handles
+    }
+
+    // Poll until no pull is running and the finished run we care about appears.
+    // `matchId(id)` decides whether a finished run is "ours". Returns that run, or
+    // null on timeout (the pull keeps running server-side; the user can reload).
+    async function pollUntilDone(matchId) {
+      const deadline = Date.now() + 600000;  // 10 min cap on polling, not on the pull
+      while (Date.now() < deadline) {
+        await sleep(2500);
+        let s;
+        try { s = await getStatus(); } catch (e) { continue; }
+        if (s.running) continue;
+        if (s.last && s.last.finished_at && matchId(s.last.id)) return s.last;
+        // not running yet no matching finished run: the just-started thread hasn't
+        // created its row yet — keep polling until it does (bounded by deadline).
+      }
+      return null;
+    }
+
+    function reportPull(last, reload) {
+      if (!last) { toast('同步仍在进行，请稍后刷新页面查看'); return; }
+      if (last.ok) {
+        toast('刷新完成' + countsSummary(last.counts));
+        if (reload) setTimeout(() => location.reload(), 900);
+      } else {
+        toast('刷新失败：' + (last.error || '未知错误'));
+      }
+    }
+
+    function setBusy(btn, busy, label) {
+      if (!btn) return;
+      btn.disabled = busy;
+      btn.textContent = busy ? '刷新中…' : (label || '立即刷新');
+    }
+
     async function refreshNow(btn) {
-      btn.disabled = true; const old = btn.textContent; btn.textContent = '刷新中…';
+      const old = btn.textContent;
+      setBusy(btn, true);
       try {
-        const r = await fetch('/api/refresh', { method: 'POST' });
-        const d = await r.json();
-        toast(d.status === 'started' ? '已开始后台拉取，稍后刷新页面查看' :
-              d.status === 'already_running' ? '已有拉取任务在进行中' : ('刷新：' + d.status));
-      } catch (e) { toast('刷新失败：' + e); }
-      finally { btn.disabled = false; btn.textContent = old; }
+        const before = await getStatus().catch(() => ({}));
+        const baseId = before.last ? before.last.id : 0;
+        const d = await (await fetch('/api/refresh', { method: 'POST' })).json();
+        let matchId;
+        if (d.status === 'started') {
+          matchId = (id) => id > baseId;            // wait for the new run
+        } else if (d.status === 'already_running') {
+          toast('已有同步任务在进行中，正在等待完成…');
+          matchId = (id) => id >= baseId;           // wait for the in-progress run
+        } else {
+          toast('刷新：' + d.status); return;
+        }
+        reportPull(await pollUntilDone(matchId), true);
+      } catch (e) {
+        toast('刷新失败：' + e);
+      } finally {
+        setBusy(btn, false, old);
+      }
     }
+
+    // On load, surface a pull that's already running (startup first-sync or a
+    // scheduled one) so the user sees progress without having clicked anything.
+    async function checkBackgroundPull() {
+      let s;
+      try { s = await getStatus(); } catch (e) { return; }
+      if (!s.running || !s.last) return;
+      const btn = document.querySelector('.refresh-btn');
+      const old = btn ? btn.textContent : '';
+      setBusy(btn, true);
+      toast('检测到后台同步，正在等待完成…');
+      const targetId = s.last.id, firstSync = !s.has_data;
+      const last = await pollUntilDone((id) => id >= targetId);
+      setBusy(btn, false, old);
+      reportPull(last, firstSync);  // only auto-reload when it was the first sync
+    }
+    window.addEventListener('DOMContentLoaded', checkBackgroundPull);
   </script>
   {% block scripts %}{% endblock %}
 </body>

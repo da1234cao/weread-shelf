@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import copy
+
 from app import repository as repo
 from app.db import session_scope
 from app.fetcher import run_daily_pull
-from app.models import Bookmark
+from app.models import Book, Bookmark
 
 from . import fixtures as fx
 
@@ -35,6 +37,21 @@ class FakeClient:
     def recommend(self, count=12, max_idx=None):
         return fx.RECOMMEND
 
+    def book_info(self, book_id):
+        return {"bookId": book_id, "publisher": "某出版社",
+                "isbn": f"ISBN-{book_id}", "intro": "公开简介"}
+
+    def chapter_info(self, book_id):
+        # Each book reports a chapterUpdateTime matching its shelf updateTime, so
+        # an unchanged rerun never re-fetches.
+        return {
+            "b1": {"bookId": "b1", "chapterUpdateTime": 100,
+                   "chapters": [{"chapterUid": 1, "chapterIdx": 1, "title": "楔子",
+                                 "level": 1, "wordCount": 500}]},
+            "b2": fx.CHAPTERS_B2,
+            "b3": {"bookId": "b3", "chapterUpdateTime": 50, "chapters": []},
+        }.get(book_id, {"chapters": []})
+
     def close(self):
         pass
 
@@ -48,6 +65,8 @@ def test_run_daily_pull_persists_everything():
     assert counts["reviews"] == 1
     assert counts["recs"] == 1
     assert counts["days"] >= 3  # monthly(3 non-zero) + weekly(1)
+    assert counts["books_info"] == 4  # b1, b2, b3, r1 each enriched once
+    assert counts["chapters"] == 4  # b1, b2, b3, r1 each get a TOC fetch
 
     with session_scope() as s:
         # Daily series: zero-second day is dropped.
@@ -73,6 +92,16 @@ def test_run_daily_pull_persists_everything():
         assert detail["review_count"] == 1
         # chapters ordered by idx; chapter 6 (第二章) before chapter 8 (第四章)
         assert detail["chapters"][0]["title"] == "第二章"
+        # /book/info enrichment ran during the pull (write-once).
+        assert detail["book"].info_fetched == 1
+        assert detail["book"].isbn == "ISBN-b2"
+        assert detail["book"].publisher == "某出版社"
+
+        # Full table of contents stored, ordered by chapterIdx, level preserved.
+        toc = repo.book_chapters(s, "b2")
+        assert [c.title for c in toc] == ["第一章", "第二章", "第二章·小节", "第四章"]
+        assert toc[2].level == 2 and toc[0].level == 1
+        assert s.get(Book, "b2").chapters_update_time == 200
 
         recs = repo.current_recommendations(s)
         assert recs[0].title == "枪炮、病菌与钢铁"
@@ -118,3 +147,36 @@ def test_idempotent_rerun_does_not_duplicate():
         assert shelf["total"] == 3  # not 6
         detail = repo.book_notes(s, "b2")
         assert detail["bookmark_count"] == 2  # not 4
+        # TOC isn't re-fetched on an unchanged rerun (shelf updateTime unchanged).
+        assert len(repo.book_chapters(s, "b2")) == 4
+
+
+def test_chapters_refetched_when_shelf_reports_update():
+    """A serialized book whose shelf updateTime grows gets its TOC re-pulled."""
+    run_daily_pull(client=FakeClient())
+    with session_scope() as s:
+        assert len(repo.book_chapters(s, "b2")) == 4
+        assert s.get(Book, "b2").chapters_update_time == 200
+
+    class C(FakeClient):
+        def shelf_sync(self):
+            shelf = copy.deepcopy(fx.SHELF)
+            for b in shelf["books"]:
+                if b["bookId"] == "b2":
+                    b["updateTime"] = 300  # new chapter landed
+            return shelf
+
+        def chapter_info(self, book_id):
+            if book_id == "b2":
+                return {"bookId": "b2", "chapterUpdateTime": 300,
+                        "chapters": fx.CHAPTERS_B2["chapters"] + [
+                            {"chapterUid": 30, "chapterIdx": 9, "title": "第五章",
+                             "level": 1, "wordCount": 900}]}
+            return super().chapter_info(book_id)
+
+    run_daily_pull(client=C())
+    with session_scope() as s:
+        toc = repo.book_chapters(s, "b2")
+        assert len(toc) == 5
+        assert toc[-1].title == "第五章"
+        assert s.get(Book, "b2").chapters_update_time == 300

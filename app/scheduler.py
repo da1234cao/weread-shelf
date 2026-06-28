@@ -12,8 +12,8 @@ import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
+from . import fetcher
 from . import settings_store
-from .fetcher import run_daily_pull
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +25,8 @@ def _job() -> None:
     if not settings_store.get().api_key:
         logger.info("scheduled pull skipped: API key not configured")
         return
-    try:
-        run_daily_pull(kind="daily")
-    except Exception:
-        logger.exception("scheduled pull failed")
+    # Share the lock with startup/manual pulls so they never overlap.
+    fetcher.run_pull_locked(kind="daily")
 
 
 def _trigger() -> IntervalTrigger:

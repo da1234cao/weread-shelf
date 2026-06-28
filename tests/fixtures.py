@@ -94,6 +94,20 @@ REVIEWS_B2 = {
     ],
 }
 
+# /book/chapterinfo — full table of contents. chapterUpdateTime mirrors the
+# shelf's per-book updateTime (200 for b2). level>1 marks a nested sub-section.
+CHAPTERS_B2 = {
+    "bookId": "b2",
+    "synckey": 99,
+    "chapterUpdateTime": 200,
+    "chapters": [
+        {"chapterUid": 24, "chapterIdx": 4, "title": "第一章", "level": 1, "wordCount": 1200},
+        {"chapterUid": 26, "chapterIdx": 6, "title": "第二章", "level": 1, "wordCount": 3400},
+        {"chapterUid": 27, "chapterIdx": 7, "title": "第二章·小节", "level": 2, "wordCount": 800},
+        {"chapterUid": 28, "chapterIdx": 8, "title": "第四章", "level": 1, "wordCount": 2100},
+    ],
+}
+
 RECOMMEND = {
     "books": [
         {"bookId": "r1", "title": "枪炮、病菌与钢铁", "author": "贾雷德·戴蒙德",

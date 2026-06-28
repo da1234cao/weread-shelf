@@ -81,6 +81,8 @@
 ### 5.5 拉取调度
 - 用**间隔预设**配置定时拉取，档位为 **6 / 12 / 24 小时（默认 24）**，替代原先的 cron 表达式。
 - 提供「立即刷新」按钮（沿用现有 `/api/refresh`，后台拉取、带运行中互斥）。
+- **完成反馈**：点刷新后前端轮询 `/api/refresh/status`，直到本次同步结束再弹成功（附条数）/ 失败提示；
+  打开页面时若已有后台同步在跑也会显示进度。交互细节见 [refresh-interaction.md](refresh-interaction.md)。
 - 显示上次拉取时间 / 结果 / 错误（来自 `PullRun`）。
 - 修改间隔后**无需重启**即可生效（重排调度任务）。
 
@@ -130,18 +132,3 @@
   - `/admin/*`：始终要求 `is_admin` 身份。
   - 公开页面与数据接口：§5.3 关闭时全公开；开启时需任一有效用户或管理员（范围见 §5.3）。
 
-## 8. 数据模型变更（新增表，供实现参考）
-
-- `app_settings`：单行配置表，承载 §6 全部 DB 配置项（含 API Key、会话签名密钥、服务端建议的 skill_version）。
-- `app_user`：所有账号（含管理员），字段含 `username` 主键、`password_hash`、`is_admin`、
-  `must_change`（首登强制改密用）、时间戳。首次启动种子一条 `admin`/`admin`（`is_admin=true`、`must_change=true`）。
-- 复用现有 `PullRun` 展示拉取状态。
-
-## 9. 实现阶段清理清单
-
-进入编码后需顺手清理（与本规格配套）：
-
-- 删除 [.env.example](../.env.example)；[docker-compose.yml](../docker-compose.yml) 去掉 `env_file: .env`。
-- [config.py](../app/config.py) 砍到只剩 DB 路径等基础设施项，其余配置改从 `app_settings` 读。
-- 退役 `PULL_CRON` / `TZ` / `SKILL_VERSION` / `WEREAD_API_KEY` 环境变量。
-- 改写 [README.md](../README.md)：去掉 `.env`/环境变量配置说明，补首启 admin 引导流程。

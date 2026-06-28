@@ -22,7 +22,7 @@ def ts_to_date(ts: int) -> str:
 
 
 def fmt_duration(seconds: int | None) -> str:
-    """Human-readable duration, e.g. 5844393 -> '1623h 26m'."""
+    """Human-readable duration, e.g. 5844393 -> '1623小时26分'."""
     seconds = int(seconds or 0)
     if seconds < 60:
         return f"{seconds}秒"

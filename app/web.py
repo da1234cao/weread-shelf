@@ -15,12 +15,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from . import auth
+from . import fetcher
 from . import repository as repo
 from . import settings_store
 from .client import WeReadClient
 from .db import init_db, session_scope
-from .fetcher import run_daily_pull
-from .models import AppUser, Book
+from .models import AppUser
 from .scheduler import reschedule, shutdown_scheduler, start_scheduler
 from .utils import fmt_duration
 
@@ -31,23 +31,8 @@ BASE_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 templates.env.filters["duration"] = fmt_duration
 
-# Guards against overlapping pulls (startup, scheduler, manual refresh).
-_pull_lock = threading.Lock()
-
 # Paths reachable without authentication even when "require login" is on.
 _PUBLIC_PREFIXES = ("/login", "/logout", "/static", "/api/health", "/favicon.ico")
-
-
-def _run_pull_locked(kind: str) -> None:
-    if not _pull_lock.acquire(blocking=False):
-        logger.info("pull already running; skipping %s", kind)
-        return
-    try:
-        run_daily_pull(kind=kind)
-    except Exception:
-        logger.exception("%s pull failed", kind)
-    finally:
-        _pull_lock.release()
 
 
 def _has_any_data() -> bool:
@@ -73,7 +58,7 @@ async def lifespan(app: FastAPI):
     start_scheduler()
     if settings_store.get().api_key and not _has_any_data():
         logger.info("no data yet; kicking off initial pull in background")
-        threading.Thread(target=_run_pull_locked, args=("startup",), daemon=True).start()
+        threading.Thread(target=fetcher.run_pull_locked, args=("startup",), daemon=True).start()
     yield
     shutdown_scheduler()
 
@@ -167,12 +152,13 @@ def page_notes(request: Request):
 
 @app.get("/book/{book_id}")
 def page_book(request: Request, book_id: str):
-    _maybe_enrich(book_id)
+    # Book metadata is enriched during the pull (see fetcher), so this is a pure read.
     with session_scope() as session:
         data = repo.book_notes(session, book_id)
+        toc = repo.book_chapters(session, book_id)
     if data["book"] is None and not data["chapters"]:
         raise HTTPException(status_code=404, detail="book not found")
-    return _render(request, "book_detail.html", active="", **data)
+    return _render(request, "book_detail.html", active="", toc=toc, **data)
 
 
 @app.get("/discover")
@@ -182,46 +168,6 @@ def page_discover(request: Request):
     with session_scope() as session:
         recs = repo.current_recommendations(session)
     return _render(request, "discover.html", active="discover", recs=recs)
-
-
-def _maybe_enrich(book_id: str) -> None:
-    """Lazily fetch /book/info once per book and cache it (needs a configured key)."""
-    if not settings_store.get().api_key:
-        return
-    with session_scope() as session:
-        book = session.get(Book, book_id)
-        if book is not None and book.info_fetched:
-            return
-    try:
-        with WeReadClient() as client:
-            info = client.book_info(book_id)
-    except Exception as exc:
-        logger.warning("book_info failed for %s: %s", book_id, exc)
-        return
-
-    def _to_int(value) -> int:
-        try:
-            return int(float(value))
-        except (TypeError, ValueError):
-            return 0
-
-    def _str(value) -> str:
-        return value if isinstance(value, str) else ""
-
-    with session_scope() as session:
-        repo.upsert_book(
-            session, book_id,
-            title=_str(info.get("title")), author=_str(info.get("author")),
-            translator=_str(info.get("translator")), cover=_str(info.get("cover")),
-            category=_str(info.get("category")), intro=_str(info.get("intro")),
-            publisher=_str(info.get("publisher")), publish_time=_str(info.get("publishTime")),
-            isbn=_str(info.get("isbn")), rating=_to_int(info.get("newRating")),
-            rating_count=_to_int(info.get("newRatingCount")),
-        )
-        book = session.get(Book, book_id)
-        if book is not None:
-            book.info_fetched = 1
-            session.add(book)
 
 
 # --------------------------------------------------------------------------
@@ -316,6 +262,12 @@ def admin_apikey(request: Request, api_key: str = Form(...)):
         logger.warning("API key test call failed: %s", exc)
         return RedirectResponse("/admin?saved=apikey_fail", status_code=303)
     settings_store.save(api_key=api_key)
+    # With a key now configured and no data yet, kick off the first pull in the
+    # background (mirrors lifespan's initial pull) so the dashboard fills in on its
+    # own; the page's poller surfaces progress. Steady-state key replacement, where
+    # data already exists, leaves it to the scheduler / "refresh" button.
+    if not _has_any_data():
+        threading.Thread(target=fetcher.run_pull_locked, args=("startup",), daemon=True).start()
     return RedirectResponse("/admin?saved=apikey", status_code=303)
 
 
@@ -439,7 +391,32 @@ def export_notes_md(book_id: str):
 def api_refresh():
     if not settings_store.get().api_key:
         raise HTTPException(status_code=400, detail="API key not configured")
-    if _pull_lock.locked():
+    if fetcher.pull_running():
         return JSONResponse({"status": "already_running"}, status_code=202)
-    threading.Thread(target=_run_pull_locked, args=("manual",), daemon=True).start()
+    threading.Thread(target=fetcher.run_pull_locked, args=("manual",), daemon=True).start()
     return JSONResponse({"status": "started"}, status_code=202)
+
+
+@app.get("/api/refresh/status")
+def api_refresh_status():
+    """Report whether a pull is in progress and the latest run's outcome.
+
+    The frontend polls this after starting a refresh — and on page load — so the
+    user can tell when a pull (manual, scheduled, or the startup one) has actually
+    finished and whether it succeeded. ``has_data`` reflects whether any pull has
+    ever succeeded, so a first-time sync can auto-reload while later ones don't.
+    """
+    with session_scope() as session:
+        run = repo.latest_pull(session)
+        has_data = repo.last_pull(session) is not None
+        last = None
+        if run is not None:
+            last = {
+                "id": run.id,
+                "kind": run.kind,
+                "ok": run.ok,
+                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                "error": run.error,
+                "counts": json.loads(run.counts_json or "{}"),
+            }
+    return JSONResponse({"running": fetcher.pull_running(), "has_data": has_data, "last": last})

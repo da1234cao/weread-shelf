@@ -38,7 +38,7 @@ python cli.py probe /readdata/detail -p mode=overall   # 调试单个接口
 
 ## 接口总览
 
-共 17 个，本项目已用 6 个（标 ✅），未用 11 个。
+共 17 个，本项目已用 8 个（标 ✅），未用 9 个。
 
 | # | api_name | 用途 | 登录 | 本项目 |
 |---|----------|------|:----:|:------:|
@@ -48,8 +48,8 @@ python cli.py probe /readdata/detail -p mode=overall   # 调试单个接口
 | 4 | `/book/bookmarklist` | 个人划线列表 | 是 | ✅ |
 | 5 | `/review/list/mine` | 个人想法/笔记 | 是 | ✅ |
 | 6 | `/book/recommend` | 个性化推荐书 | 是 | ✅ |
-| 7 | `/book/info` | 书籍基本信息 | 否 | — |
-| 8 | `/book/chapterinfo` | 书籍章节目录 | 否 | — |
+| 7 | `/book/info` | 书籍基本信息 | 否 | ✅ |
+| 8 | `/book/chapterinfo` | 书籍章节目录 | 否 | ✅ |
 | 9 | `/book/getprogress` | 单本阅读进度 | 是 | — |
 | 10 | `/book/similar` | 相似书推荐 | 是 | — |
 | 11 | `/book/bestbookmarks` | 热门划线（含文本） | 是 | — |
@@ -90,7 +90,7 @@ python cli.py probe /readdata/detail -p mode=overall   # 调试单个接口
 **返回字段**：`books`（书目，含 `bookId`/`title`/`author`/`cover`/`finishReading`/`secret`/`updateTime`）、
 `archive`（分组文件夹，含 `name` 与 `bookIds`）、`albums`（听书）、`mp`（公众号）。
 
-### 7. `/book/info`
+### 7. `/book/info` ✅
 获取书籍基本信息（书名、作者、简介等）。`need_login=false`，公开数据。
 
 | 参数 | 类型 | 必填 | 说明 |
@@ -100,7 +100,10 @@ python cli.py probe /readdata/detail -p mode=overall   # 调试单个接口
 **返回字段**：`bookId`、`deepLink`、`title`、`author`、`translator`、`cover`、`intro`、`category`、
 `publisher`、`publishTime`、`isbn`、`wordCount`、`newRating`、`newRatingCount`、`newRatingDetail`（评分）。
 
-### 8. `/book/chapterinfo`
+> 本项目用法：主同步提交后，对所有缺元数据的书（`info_fetched==0`）逐本补全简介/分类/出版社/出版时间/ISBN，
+> 每本一个独立短事务。**写一次**（拉到即标记 `info_fetched`），此后每天只补新书。
+
+### 8. `/book/chapterinfo` ✅
 获取书籍的章节目录。`need_login=false`，公开数据。是 `/book/underlines`、`/book/bestbookmarks` 取 `chapterUid` 的前置接口。
 
 | 参数 | 类型 | 必填 | 说明 |
@@ -108,6 +111,9 @@ python cli.py probe /readdata/detail -p mode=overall   # 调试单个接口
 | `bookId` | string | 是 | 书籍 ID |
 
 **返回字段**：`bookId`、`synckey`、`chapterUpdateTime`、`chapters`。
+
+> 本项目用法：同样在主同步之后逐本补章节目录，供书籍详情页按章节归并划线/想法。与 `/book/info` 的写一次不同，
+> 当书架报告有更新章节（`chapterUpdateTime` 变新）时会**重新拉取**。
 
 ### 9. `/book/getprogress`
 获取用户对某本书的阅读进度（比 `/user/notebooks` 中的进度更精确，可单本查询）。

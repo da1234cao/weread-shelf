@@ -33,10 +33,23 @@
     {% if book and book.publisher %}<tr><th>出版社</th><td>{{ book.publisher }}</td></tr>{% endif %}
     {% if book and book.publish_time %}<tr><th>出版时间</th><td>{{ book.publish_time }}</td></tr>{% endif %}
     {% if book and book.isbn %}<tr><th>ISBN</th><td>{{ book.isbn }}</td></tr>{% endif %}
-    {% if book and book.rating %}<tr><th>评分</th><td>{{ book.rating }}{% if book.rating_count %} · {{ book.rating_count }} 人评价{% endif %}</td></tr>{% endif %}
   </table>
-  {% if not (book and (book.intro or book.category or book.publisher)) %}
+  {% if not (book and (book.intro or book.category or book.publisher)) and not toc %}
     <div class="empty">暂无更多书籍信息。</div>
+  {% endif %}
+
+  {% if toc %}
+  <div class="toc">
+    <h3 class="toc-title">目录 <span class="toc-count">{{ toc|length }} 章</span></h3>
+    <ol class="toc-list">
+      {% for ch in toc %}
+      <li class="toc-item">
+        <span class="toc-ch-title" style="padding-left: {{ (ch.level - 1) * 18 }}px">{{ ch.title or '未命名章节' }}</span>
+        {% if ch.word_count %}<span class="toc-ch-words">{{ '{:,}'.format(ch.word_count) }} 字</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+  </div>
   {% endif %}
 </section>
 

@@ -67,8 +67,6 @@ class Book(SQLModel, table=True):
     publish_time: str = ""
     isbn: str = ""
     finished: int = 0
-    rating: int = 0
-    rating_count: int = 0
     # Per-book reading state (from notebooks / getprogress).
     reading_progress: int = 0
     note_count: int = 0
@@ -76,6 +74,10 @@ class Book(SQLModel, table=True):
     review_count: int = 0
     # Whether /book/info has already enriched the metadata (lazy, write-once).
     info_fetched: int = 0
+    # chapterUpdateTime of the last TOC fetch (0 = never). The shelf's per-book
+    # updateTime equals this, so we re-fetch chapters only when the shelf reports
+    # a newer value — free change detection that handles serialized books.
+    chapters_update_time: int = 0
     updated_at: datetime = Field(default_factory=_utcnow)
 
 
@@ -125,6 +127,24 @@ class Review(SQLModel, table=True):
     type: int = 0
     is_private: int = 0
     create_time: int = 0
+
+
+class Chapter(SQLModel, table=True):
+    """A book's table-of-contents entry (from /book/chapterinfo, public data).
+
+    Stored as a full snapshot per book (replaced on each fetch) so the detail
+    page can show the real catalog, not just chapters that happen to have notes.
+    """
+
+    __tablename__ = "chapter"
+
+    book_id: str = Field(primary_key=True, index=True)
+    chapter_uid: int = Field(primary_key=True)
+    chapter_idx: int = 0
+    title: str = ""
+    level: int = 1  # 1 = top level; >1 indents under its parent in the TOC.
+    word_count: int = 0
+    update_time: int = 0
 
 
 class Recommendation(SQLModel, table=True):
@@ -189,6 +209,6 @@ class PullRun(SQLModel, table=True):
     started_at: datetime = Field(default_factory=_utcnow)
     finished_at: datetime | None = None
     ok: bool = False
-    kind: str = "daily"  # daily | backfill | manual
+    kind: str = "daily"  # startup | daily | manual | backfill
     error: str = ""
     counts_json: str = "{}"
