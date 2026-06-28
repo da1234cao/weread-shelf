@@ -1,16 +1,13 @@
 # weread-shelf · 微信读书数据看板
 
 每天自动拉取你自己的微信读书数据，存进本地 SQLite，并以一个自托管的 Web 看板展示
-**长期趋势**（阅读时长曲线、书架进度、笔记/划线增量、个性化推荐）——这些是官方 App
-本身不长期保留的东西。专为 Linux + 容器部署设计。
+阅读时长曲线、书架进度、笔记/划线增量、个性化推荐。
 
-所有配置（API Key、调度、时区、模块显隐、访问控制、账号）都在**管理页面**里完成，
-**没有 `.env` 文件**。
 
 ## 数据来源：官方 Agent API Gateway
 
 所有数据都来自官方 skill 背后的 HTTP 网关，使用一个**长期有效**、自动绑定你账号的
-API Key（不像社区 cookie 方案那样每 ~2 小时就要刷新 `wr_skey`）。
+API Key。
 
 ```
 POST https://i.weread.qq.com/api/agent/gateway
@@ -63,6 +60,3 @@ python cli.py backfill -m 13   # 回填最近 13 个月的每日阅读时长历�
 python cli.py probe /readdata/detail -p mode=overall   # 调试：原始网关调用
 pytest                      # 运行测试
 ```
-
-数据库路径默认 `./data/weread.db`，可用环境变量 `DB_PATH` 覆盖（容器内为 `/data/weread.db`）。
-除 `DB_PATH` 这一基础设施项外，其余配置一律在管理页里改。

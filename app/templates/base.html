@@ -18,7 +18,6 @@
       </nav>
       {% if cur_user and cur_user.is_admin %}<a class="navlink" href="/admin">管理</a>{% endif %}
       {% if cur_user %}<a class="navlink" href="/logout">退出</a>{% else %}<a class="navlink" href="/login">登录</a>{% endif %}
-      <button class="refresh-btn" onclick="refreshNow(this)">立即刷新</button>
     </div>
   </header>
   <main>

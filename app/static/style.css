@@ -36,11 +36,6 @@ nav.tabs a {
   padding: 8px 14px; border-radius: 8px; color: var(--muted); font-weight: 500;
 }
 nav.tabs a.active, nav.tabs a:hover { background: var(--accent-soft); color: var(--accent); text-decoration: none; }
-.refresh-btn {
-  border: 1px solid var(--border); background: var(--card); color: var(--ink);
-  padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 14px;
-}
-.refresh-btn:hover { background: var(--accent-soft); }
 nav.tabs + .navlink, .navlink { color: var(--muted); font-weight: 500; padding: 8px 10px; border-radius: 8px; }
 .navlink:hover { background: var(--accent-soft); color: var(--accent); text-decoration: none; }
 

@@ -1,7 +1,7 @@
 # 微信读书 Agent API Gateway 接口文档
 
 本项目所有数据均来自微信读书官方 skill 背后的 HTTP 网关。本文档整理该网关**全部 17 个接口**，
-内容由实测 `/_list` 目录接口获得（`python cli.py probe /_list`）。
+内容由实测 `/_list` 目录接口获得（`python cli.py probe /_list`）。最近一次核对：2026-06-28，共 17 个接口，参数与返回字段均与线上一致。
 
 ## 调用方式
 
@@ -78,7 +78,9 @@ python cli.py probe /readdata/detail -p mode=overall   # 调试单个接口
 `readRate`、`wrReadTime`、`wrListenTime`、`rank`、`registTime`、`medals`、`preferBooks`、
 `recordReadingTime`、`readRecordsWord`、`readDistributionWord`。
 
-> 本项目用法：拉 `overall/monthly/weekly` 三档存快照；用 `monthly` 的 `readTimes` 做每日趋势与历史回填。
+> 本项目用法：每次同步按 `overall` → `monthly` → `weekly` 顺序各存一份统计快照；其中 `monthly` 与 `weekly`
+> 的 `readTimes` 都会写入每日时长序列（驱动每日趋势图）。历史回填另循环调用 `monthly` + 历史 `baseTime` 逐月补齐
+> （见 `fetcher.backfill_history`，默认回填 13 个月）。
 
 ---
 
@@ -89,6 +91,10 @@ python cli.py probe /readdata/detail -p mode=overall   # 调试单个接口
 
 **返回字段**：`books`（书目，含 `bookId`/`title`/`author`/`cover`/`finishReading`/`secret`/`updateTime`）、
 `archive`（分组文件夹，含 `name` 与 `bookIds`）、`albums`（听书）、`mp`（公众号）。
+
+> 本项目用法：主同步第二步拉取，**无参数**。用 `archive` 建 `book_id → 分组名` 映射，`books` 逐本 upsert 基本信息，
+> 并把每本的 `finishReading/secret/updateTime` 存为当日书架快照。`albums`(听书)/`mp`(公众号) 暂未使用。
+> 也用作 `/admin` 保存 API Key 时的连通性自检调用。
 
 ### 7. `/book/info` ✅
 获取书籍基本信息（书名、作者、简介等）。`need_login=false`，公开数据。
@@ -146,6 +152,9 @@ python cli.py probe /readdata/detail -p mode=overall   # 调试单个接口
 
 **返回字段**：`books`（含 `bookId`/`title`/`author`/`cover`/`category`/`intro`）。
 
+> 本项目用法：主同步最后一步，按 `count=12` 拉一页"为你推荐"存当日快照；推荐书也会 upsert 进书籍表。
+> 属**非关键步骤**——失败只计 `errors` 并继续，不中断整次同步。
+
 ---
 
 ## 三、个人笔记（划线 + 想法）
@@ -161,6 +170,10 @@ python cli.py probe /readdata/detail -p mode=overall   # 调试单个接口
 **返回字段**：`synckey`、`totalBookCount`、`totalNoteCount`、`noBookReviewCount`、`hasMore`、
 `books`（每本含 `book` 元数据、`readingProgress`、`noteCount`、`bookmarkCount`、`reviewCount`、`sort`）。
 
+> 本项目用法：主同步第三步。按 `count=50` + `lastSort` 游标翻页拉全（安全上限 100 页），
+> 每本写入 `readingProgress/noteCount/bookmarkCount/reviewCount` 计数；再据计数决定是否逐本拉划线（`noteCount>0`）
+> 与想法（`reviewCount>0`），从而避免对无笔记的书做多余请求。
+
 ### 4. `/book/bookmarklist` ✅
 获取用户对某本书的划线列表（不含书签）。
 
@@ -170,6 +183,9 @@ python cli.py probe /readdata/detail -p mode=overall   # 调试单个接口
 
 **返回字段**：`synckey`、`updated`（划线，含 `bookmarkId`/`markText`/`chapterUid`/`chapterIdx`/
 `colorStyle`/`type`/`range`/`createTime`）、`removed`（已删除划线 ID）、`chapters`（章节标题映射）、`book`。
+
+> 本项目用法：仅当某书 `/user/notebooks` 报告 `noteCount>0` 时逐本拉取；用 `chapters` 把 `chapterUid`
+> 映射成章节标题随划线一起入库，`updated` upsert、`removed` 删除。
 
 ### 5. `/review/list/mine` ✅
 获取用户在某本书上的个人想法/笔记。**注意参数是小写 `bookid`。**
@@ -182,6 +198,9 @@ python cli.py probe /readdata/detail -p mode=overall   # 调试单个接口
 
 **返回字段**：`reviews`（每项把想法嵌在 `review` 下，含 `content`/`abstract`/`chapterUid`/
 `chapterTitle`/`range`/`type`/`isPrivate`/`createTime`）、`totalCount`、`hasMore`、`synckey`、`removed`。
+
+> 本项目用法：仅当某书 `reviewCount>0` 时按 `count=100` 拉取；入库前需把每项的 `review` 子对象取出
+> （列表项本身是包了一层的容器）。
 
 ---
 

@@ -4,7 +4,7 @@
 <div class="sub">基于你的阅读偏好 · {{ recs|length }} 本</div>
 
 {% if not recs %}
-  <div class="empty">还没有推荐数据，点击右上角「立即刷新」。</div>
+  <div class="empty">还没有推荐数据，请到管理页点击「立即刷新」。</div>
 {% else %}
 <div class="book-grid">
   {% for r in recs %}
