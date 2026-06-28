@@ -85,6 +85,13 @@ def test_run_daily_pull_persists_everything():
         names = {g["name"] for g in shelf["groups"]}
         assert {"文学", "历史", "未分组"} <= names
 
+        # "Finished" is the user's read-finished flag (shelf finishReading), NOT the
+        # notebook's book.finished (= 已完结, book done being serialized). b2 has
+        # finishReading=0 but book.finished=1, so it must stay unfinished; b1 has
+        # finishReading=1 and stays finished.
+        assert s.get(Book, "b2").finished == 0
+        assert s.get(Book, "b1").finished == 1
+
         notes = repo.books_with_notes(s)
         assert notes[0]["book_id"] == "b2"  # only book with notes
         detail = repo.book_notes(s, "b2")

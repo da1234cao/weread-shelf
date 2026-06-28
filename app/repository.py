@@ -356,7 +356,9 @@ def current_shelf(session: Session) -> dict[str, Any]:
                 "author": b.author if b else "",
                 "cover": b.cover if b else "",
                 "progress": b.reading_progress if b else 0,
-                "finished": it.finish_reading or (b.finished if b else 0),
+                # The shelf snapshot's finish_reading is the authoritative per-user
+                # "已读完" flag (finishReading); don't fall back to Book.finished.
+                "finished": it.finish_reading,
             }
         )
     ordered = sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0]))

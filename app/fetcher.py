@@ -101,23 +101,27 @@ def _run_main_pull(client: WeReadClient, kind: str, pull_date: str, counts: dict
                 if mode in ("monthly", "weekly"):
                     counts["days"] += repo.upsert_daily_read_times(session, data.get("readTimes", {}))
 
-            # 2) Shelf.
+            # 2) Shelf. The shelf is the only source of the per-user "read-finished"
+            # flag (finishReading); we record it per book to reuse in the notebook loop.
             shelf = client.shelf_sync()
             archive = _shelf_archive_map(shelf)
             shelf_items = []
+            finish_map: dict[str, int] = {}
             for b in shelf.get("books", []) or []:
                 bid = b.get("bookId")
                 if not bid:
                     continue
+                finished = int(b.get("finishReading", 0) or 0)
+                finish_map[bid] = finished
                 repo.upsert_book(
                     session, bid,
                     title=b.get("title"), author=b.get("author"), cover=b.get("cover"),
-                    finished=int(b.get("finishReading", 0) or 0),
+                    finished=finished,
                 )
                 shelf_items.append({
                     "book_id": bid,
                     "archive_name": archive.get(bid, ""),
-                    "finish_reading": int(b.get("finishReading", 0) or 0),
+                    "finish_reading": finished,
                     "secret": int(b.get("secret", 0) or 0),
                     "update_time": int(b.get("updateTime", 0) or 0),
                 })
@@ -135,12 +139,16 @@ def _run_main_pull(client: WeReadClient, kind: str, pull_date: str, counts: dict
                 cats = book.get("categories")
                 if isinstance(cats, list) and cats:
                     category = cats[0].get("title", "") if isinstance(cats[0], dict) else ""
+                # finished := finishReading from the shelf, NOT the notebook's
+                # book.finished (= 已完结, the *book* is serialized to completion, not
+                # that the user read it). Off-shelf books have no such evidence → 0,
+                # which also clears stale flags written by the old behaviour.
                 repo.upsert_book(
                     session, bid,
                     title=book.get("title"), author=book.get("author"), cover=book.get("cover"),
                     category=category, publisher=book.get("publisher"),
                     publish_time=book.get("publishTime"), intro=book.get("intro"),
-                    finished=int(book.get("finished", 0) or 0),
+                    finished=finish_map.get(bid, 0),
                     reading_progress=int(nb.get("readingProgress", 0) or 0),
                     note_count=int(nb.get("noteCount", 0) or 0),
                     bookmark_count=int(nb.get("bookmarkCount", 0) or 0),
