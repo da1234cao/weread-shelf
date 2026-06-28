@@ -74,6 +74,8 @@ class Book(SQLModel, table=True):
     note_count: int = 0
     bookmark_count: int = 0
     review_count: int = 0
+    # Whether /book/info has already enriched the metadata (lazy, write-once).
+    info_fetched: int = 0
     updated_at: datetime = Field(default_factory=_utcnow)
 
 
@@ -137,6 +139,45 @@ class Recommendation(SQLModel, table=True):
     cover: str = ""
     category: str = ""
     intro: str = ""
+
+
+class AppSettings(SQLModel, table=True):
+    """Single-row (id=1) app configuration, editable from the admin page.
+
+    Replaces what used to be environment variables: API key, skill version,
+    timezone, schedule, module visibility, access control, and the session
+    signing secret.
+    """
+
+    __tablename__ = "app_settings"
+
+    id: int = Field(default=1, primary_key=True)
+    api_key: str = ""
+    skill_version: str = "1.0.3"
+    # Version the gateway last suggested upgrading to (via upgrade_info).
+    suggested_skill_version: str = ""
+    show_overview: bool = True
+    show_discover: bool = True
+    require_user_auth: bool = False
+    pull_interval_hours: int = 24
+    timezone: str = "Asia/Shanghai"
+    # Random secret for signing session cookies (generated on first run).
+    session_secret: str = ""
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
+class AppUser(SQLModel, table=True):
+    """Dashboard accounts. The admin is just a user with is_admin=True."""
+
+    __tablename__ = "app_user"
+
+    username: str = Field(primary_key=True)
+    password_hash: str = ""
+    is_admin: bool = False
+    # Force a credential change on first login (seeded admin starts True).
+    must_change: bool = False
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
 
 
 class PullRun(SQLModel, table=True):

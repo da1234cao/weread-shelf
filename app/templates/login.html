@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}登录 · 微信读书看板{% endblock %}
+{% block content %}
+<div class="auth-card">
+  <h1>登录</h1>
+  {% if error %}<div class="form-error">{{ error }}</div>{% endif %}
+  <form method="post" action="/login">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>用户名<input type="text" name="username" autocomplete="username" required></label>
+    <label>密码<input type="password" name="password" autocomplete="current-password" required></label>
+    <button type="submit" class="btn-primary">登录</button>
+  </form>
+</div>
+{% endblock %}

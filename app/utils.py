@@ -5,11 +5,11 @@ from __future__ import annotations
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from .config import get_settings
-
 
 def tzinfo() -> ZoneInfo:
-    return ZoneInfo(get_settings().tz)
+    from .settings_store import get
+
+    return ZoneInfo(get().timezone)
 
 
 def today_str() -> str:

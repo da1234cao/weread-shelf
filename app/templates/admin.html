@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}管理 · 微信读书看板{% endblock %}
+{% block content %}
+<h1>管理</h1>
+
+{% set notices = {
+  "settings": "设置已保存",
+  "apikey": "API Key 已保存并校验通过",
+  "apikey_bad": "API Key 格式不对（需 wrk- 开头）",
+  "apikey_fail": "API Key 校验失败：网关调用未通过",
+  "account": "账号已更新",
+  "account_bad": "用户名和密码不能为空",
+  "account_taken": "该用户名已被占用",
+  "users": "用户已更新",
+  "user_bad": "用户名和密码不能为空",
+  "user_taken": "该用户名已存在",
+} %}
+{% if saved and notices.get(saved) %}
+  <div class="notice {{ 'notice-bad' if 'bad' in saved or 'fail' in saved or 'taken' in saved }}">{{ notices[saved] }}</div>
+{% endif %}
+
+{% if must_change %}
+  <div class="notice notice-bad">首次登录，请先修改默认账号和密码，之后才能使用其它管理功能。</div>
+  <div class="admin-card">
+    <h2>修改账号</h2>
+    <form method="post" action="/admin/account">
+      <label>新用户名<input type="text" name="username" value="{{ cur_user.username }}" required></label>
+      <label>新密码<input type="password" name="password" required></label>
+      <button type="submit" class="btn-primary">保存</button>
+    </form>
+  </div>
+{% else %}
+
+  {% if upgrade_available %}
+    <div class="notice notice-bad">网关建议升级 skill_version 到 <b>{{ s.suggested_skill_version }}</b>（当前 {{ s.skill_version }}）。在下方「设置」中更新。</div>
+  {% endif %}
+
+  <div class="admin-card">
+    <h2>网关连接（API Key）</h2>
+    <p class="sub">{% if has_key %}状态：已配置 ✓{% else %}状态：尚未配置 —— 配置后才会拉取数据{% endif %}</p>
+    <form method="post" action="/admin/apikey">
+      <label>API Key（wrk- 开头，保存时会试调网关校验）
+        <input type="password" name="api_key" placeholder="{{ '已配置，留空保持不变则不要提交' if has_key else 'wrk-...' }}" required>
+      </label>
+      <button type="submit" class="btn-primary">{{ '替换' if has_key else '保存' }}</button>
+    </form>
+  </div>
+
+  <div class="admin-card">
+    <h2>设置</h2>
+    <form method="post" action="/admin/settings">
+      <label class="check"><input type="checkbox" name="show_overview" value="true" {{ 'checked' if s.show_overview }}> 显示「概览」模块</label>
+      <label class="check"><input type="checkbox" name="show_discover" value="true" {{ 'checked' if s.show_discover }}> 显示「发现」模块</label>
+      <label class="check"><input type="checkbox" name="require_user_auth" value="true" {{ 'checked' if s.require_user_auth }}> 普通用户访问需要登录</label>
+      <label>拉取间隔
+        <select name="pull_interval_hours">
+          {% for h in [6, 12, 24] %}<option value="{{ h }}" {{ 'selected' if s.pull_interval_hours == h }}>每 {{ h }} 小时</option>{% endfor %}
+        </select>
+      </label>
+      <label>时区<input type="text" name="timezone" value="{{ s.timezone }}"></label>
+      <label>skill_version<input type="text" name="skill_version" value="{{ s.skill_version }}"></label>
+      <button type="submit" class="btn-primary">保存设置</button>
+    </form>
+  </div>
+
+  <div class="admin-card">
+    <h2>拉取状态</h2>
+    <p class="sub">
+      {% if last_pull %}
+        上次成功拉取：{{ last_pull.finished_at.strftime('%Y-%m-%d %H:%M') if last_pull.finished_at }} UTC（{{ last_pull.kind }}）
+      {% else %}还没有成功拉取记录。{% endif %}
+    </p>
+    <button class="btn-primary" onclick="refreshNow(this)">立即刷新</button>
+  </div>
+
+  <div class="admin-card">
+    <h2>用户管理</h2>
+    <table class="notes">
+      <thead><tr><th>用户名</th><th>角色</th><th>操作</th></tr></thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td>{{ u.username }}</td>
+          <td>{{ '管理员' if u.is_admin else '普通用户' }}</td>
+          <td>
+            {% if not u.is_admin %}
+            <form method="post" action="/admin/users" class="inline-form">
+              <input type="hidden" name="username" value="{{ u.username }}">
+              <input type="password" name="password" placeholder="新密码">
+              <button name="action" value="password">改密</button>
+              <button name="action" value="delete" class="btn-danger" onclick="return confirm('删除用户 {{ u.username }}？')">删除</button>
+            </form>
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <form method="post" action="/admin/users" class="inline-form" style="margin-top:14px">
+      <input type="text" name="username" placeholder="新用户名" required>
+      <input type="password" name="password" placeholder="密码" required>
+      <button name="action" value="create" class="btn-primary">新建普通用户</button>
+    </form>
+  </div>
+
+  <div class="admin-card">
+    <h2>我的账号</h2>
+    <form method="post" action="/admin/account">
+      <label>用户名<input type="text" name="username" value="{{ cur_user.username }}" required></label>
+      <label>新密码<input type="password" name="password" required></label>
+      <button type="submit" class="btn-primary">更新账号</button>
+    </form>
+  </div>
+
+{% endif %}
+{% endblock %}

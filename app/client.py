@@ -18,6 +18,7 @@ from typing import Any
 
 import httpx
 
+from . import settings_store
 from .config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -46,16 +47,27 @@ _RETRY_STATUSES = {429, 500, 502, 503, 504}
 class WeReadClient:
     """Synchronous gateway client with retries and polite rate limiting."""
 
-    def __init__(self, settings: Settings | None = None, client: httpx.Client | None = None):
+    def __init__(
+        self,
+        api_key: str | None = None,
+        skill_version: str | None = None,
+        settings: Settings | None = None,
+        client: httpx.Client | None = None,
+    ):
         self.settings = settings or get_settings()
-        if not self.settings.weread_api_key:
+        app = settings_store.get()
+        self.api_key = api_key or app.api_key
+        self.skill_version = skill_version or app.skill_version
+        if not self.api_key:
             raise RuntimeError(
-                "WEREAD_API_KEY is not set. Generate one at "
-                "https://weread.qq.com/r/weread-skills and put it in .env"
+                "API key not configured. Generate one at "
+                "https://weread.qq.com/r/weread-skills and set it on the admin page (/admin)."
             )
         self._owns_client = client is None
         self._client = client or httpx.Client(timeout=self.settings.request_timeout)
         self._last_call_ts = 0.0
+        # Latest non-empty upgrade_info the gateway returned this session.
+        self.upgrade_info: Any = None
 
     # -- lifecycle ---------------------------------------------------------
     def close(self) -> None:
@@ -71,11 +83,11 @@ class WeReadClient:
     # -- core --------------------------------------------------------------
     def call(self, api_name: str, **params: Any) -> dict[str, Any]:
         """Invoke a gateway ``api_name`` with flat top-level params."""
-        body = {"api_name": api_name, "skill_version": self.settings.skill_version}
+        body = {"api_name": api_name, "skill_version": self.skill_version}
         # Only include params that were actually provided (drop None).
         body.update({k: v for k, v in params.items() if v is not None})
         headers = {
-            "Authorization": f"Bearer {self.settings.weread_api_key}",
+            "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
 
@@ -97,6 +109,8 @@ class WeReadClient:
 
             data = self._parse(resp, api_name)
             self._check_errors(data, api_name)
+            if data.get("upgrade_info"):
+                self.upgrade_info = data["upgrade_info"]
             return data
 
     # -- typed helpers -----------------------------------------------------
@@ -118,17 +132,12 @@ class WeReadClient:
         """User's own thoughts/notes (想法) for a book. Note: param is `bookid`."""
         return self.call("/review/list/mine", bookid=book_id, count=count, synckey=synckey)
 
-    def book_info(self, book_id: str) -> dict[str, Any]:
-        return self.call("/book/info", bookId=book_id)
-
-    def book_progress(self, book_id: str) -> dict[str, Any]:
-        return self.call("/book/getprogress", bookId=book_id)
-
     def recommend(self, count: int = 12, max_idx: int | None = None) -> dict[str, Any]:
         return self.call("/book/recommend", count=count, maxIdx=max_idx)
 
-    def search(self, keyword: str, count: int = 10) -> dict[str, Any]:
-        return self.call("/store/search", keyword=keyword, count=count)
+    def book_info(self, book_id: str) -> dict[str, Any]:
+        """Public book metadata (intro/category/publisher/rating)."""
+        return self.call("/book/info", bookId=book_id)
 
     # -- internals ---------------------------------------------------------
     def _throttle(self) -> None:

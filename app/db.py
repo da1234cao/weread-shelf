@@ -31,7 +31,21 @@ def init_db() -> None:
     # Import models so they register on SQLModel.metadata before create_all.
     from . import models  # noqa: F401
 
-    SQLModel.metadata.create_all(get_engine())
+    engine = get_engine()
+    SQLModel.metadata.create_all(engine)
+    _migrate(engine)
+
+
+def _migrate(engine) -> None:
+    """Tiny additive migrations for columns added to pre-existing tables.
+
+    create_all() creates missing tables but never alters existing ones, so a DB
+    from an earlier version needs new columns added by hand.
+    """
+    with engine.begin() as conn:
+        book_cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(book)")}
+        if book_cols and "info_fetched" not in book_cols:
+            conn.exec_driver_sql("ALTER TABLE book ADD COLUMN info_fetched INTEGER NOT NULL DEFAULT 0")
 
 
 @contextmanager

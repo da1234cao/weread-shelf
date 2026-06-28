@@ -1,26 +1,26 @@
-"""Test fixtures: isolated temp SQLite DB and dummy settings per test."""
+"""Test fixtures: isolated temp SQLite DB and seeded settings per test."""
 
 from __future__ import annotations
-
-import importlib
 
 import pytest
 
 
 @pytest.fixture(autouse=True)
 def tmp_db(tmp_path, monkeypatch):
-    monkeypatch.setenv("WEREAD_API_KEY", "wrk-test")
     monkeypatch.setenv("DB_PATH", str(tmp_path / "test.db"))
     monkeypatch.setenv("REQUEST_INTERVAL", "0")
     monkeypatch.setenv("MAX_RETRIES", "2")
-    monkeypatch.setenv("TZ", "Asia/Shanghai")
 
-    # Reset cached settings + engine so they pick up the temp env.
-    from app import config, db
+    # Reset cached settings/engine/store so they pick up the temp DB.
+    from app import config, db, settings_store
 
     config.get_settings.cache_clear()
     db._engine = None
+    settings_store.invalidate()
     db.init_db()
+    # Seed the DB-backed config the way the admin page would.
+    settings_store.save(api_key="wrk-test", skill_version="1.0.3", timezone="Asia/Shanghai")
     yield
     db._engine = None
     config.get_settings.cache_clear()
+    settings_store.invalidate()

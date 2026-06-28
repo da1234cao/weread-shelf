@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}{{ book.title if book else '书籍' }}{% endblock %}
+{% block content %}
+<div class="sub"><a href="/shelf">← 书架</a> · <a href="/notes">笔记</a></div>
+
+<div class="book-head">
+  {% if book and book.cover %}<img class="book-head-cover" src="{{ book.cover }}" alt="">{% else %}<div class="book-head-cover"></div>{% endif %}
+  <div class="book-head-meta">
+    <h1>{{ book.title if book else '未知书籍' }}</h1>
+    <div class="sub">
+      {{ book.author if book else '' }}{% if book and book.translator %} · 译 {{ book.translator }}{% endif %}
+    </div>
+    <div class="book-head-stats">
+      {% if book and book.finished %}<span class="badge">已读完</span>
+      {% elif book and book.reading_progress %}<span class="badge">进度 {{ book.reading_progress }}%</span>{% endif %}
+      <span>划线 {{ bookmark_count }}</span>
+      <span>想法 {{ review_count }}</span>
+      {% if book %}<a href="/export/notes/{{ book.book_id }}.md">导出 Markdown</a>{% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="subtabs">
+  <button class="subtab active" data-tab="info" onclick="showTab(this)">信息</button>
+  <button class="subtab" data-tab="marks" onclick="showTab(this)">划线 {{ bookmark_count }}</button>
+  <button class="subtab" data-tab="thoughts" onclick="showTab(this)">想法 {{ review_count }}</button>
+</div>
+
+<section class="tabpane" data-pane="info">
+  {% if book and book.intro %}<p class="intro">{{ book.intro }}</p>{% endif %}
+  <table class="info-table">
+    {% if book and book.category %}<tr><th>分类</th><td>{{ book.category }}</td></tr>{% endif %}
+    {% if book and book.publisher %}<tr><th>出版社</th><td>{{ book.publisher }}</td></tr>{% endif %}
+    {% if book and book.publish_time %}<tr><th>出版时间</th><td>{{ book.publish_time }}</td></tr>{% endif %}
+    {% if book and book.isbn %}<tr><th>ISBN</th><td>{{ book.isbn }}</td></tr>{% endif %}
+    {% if book and book.rating %}<tr><th>评分</th><td>{{ book.rating }}{% if book.rating_count %} · {{ book.rating_count }} 人评价{% endif %}</td></tr>{% endif %}
+  </table>
+  {% if not (book and (book.intro or book.category or book.publisher)) %}
+    <div class="empty">暂无更多书籍信息。</div>
+  {% endif %}
+</section>
+
+<section class="tabpane" data-pane="marks" hidden>
+  {% set ns = namespace(any=false) %}
+  {% for ch in chapters %}
+    {% if ch.bookmarks %}
+      {% set ns.any = true %}
+      <div class="chapter">
+        <h3>{{ ch.title or '未命名章节' }}</h3>
+        {% for bm in ch.bookmarks %}<div class="mark">{{ bm.mark_text }}</div>{% endfor %}
+      </div>
+    {% endif %}
+  {% endfor %}
+  {% if not ns.any %}<div class="empty">这本书还没有同步到划线。</div>{% endif %}
+</section>
+
+<section class="tabpane" data-pane="thoughts" hidden>
+  {% set ns2 = namespace(any=false) %}
+  {% for ch in chapters %}
+    {% if ch.reviews %}
+      {% set ns2.any = true %}
+      <div class="chapter">
+        <h3>{{ ch.title or '未命名章节' }}</h3>
+        {% for rv in ch.reviews %}
+          <div class="thought">
+            {% if rv.abstract %}<div class="quote">{{ rv.abstract }}</div>{% endif %}
+            <div class="body">💭 {{ rv.content }}</div>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endfor %}
+  {% if not ns2.any %}<div class="empty">这本书还没有同步到想法。</div>{% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function showTab(btn) {
+    document.querySelectorAll('.subtab').forEach(b => b.classList.toggle('active', b === btn));
+    const tab = btn.dataset.tab;
+    document.querySelectorAll('.tabpane').forEach(p => { p.hidden = p.dataset.pane !== tab; });
+  }
+</script>
+{% endblock %}

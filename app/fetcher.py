@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any
 
 from . import repository as repo
+from . import settings_store
 from .client import WeReadClient
 from .db import init_db, session_scope
 from .utils import today_str, tzinfo
@@ -127,7 +128,26 @@ def run_daily_pull(client: WeReadClient | None = None, kind: str = "daily") -> d
         finally:
             if owns:
                 client.close()
+
+    _record_suggested_version(getattr(client, "upgrade_info", None))
     return counts
+
+
+def _record_suggested_version(upgrade_info: Any) -> None:
+    """If the gateway suggested a newer skill_version, store it for the admin hint."""
+    if not upgrade_info:
+        return
+    suggested = ""
+    if isinstance(upgrade_info, dict):
+        for key in ("skill_version", "version", "latest", "latestVersion", "suggest_version"):
+            if upgrade_info.get(key):
+                suggested = str(upgrade_info[key])
+                break
+        suggested = suggested or str(upgrade_info)[:40]
+    else:
+        suggested = str(upgrade_info)[:40]
+    if suggested and suggested != settings_store.get().suggested_skill_version:
+        settings_store.save(suggested_skill_version=suggested)
 
 
 def _fetch_all_notebooks(client: WeReadClient) -> list[dict[str, Any]]:

@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlmodel import Session, delete, select
 
 from .models import (
+    AppUser,
     Book,
     Bookmark,
     DailyReadTime,
@@ -205,11 +206,13 @@ def finish_pull(session: Session, run: PullRun, ok: bool, counts: dict[str, int]
 
 
 def daily_trend(session: Session, days: int = 120) -> list[dict[str, Any]]:
-    rows = session.exec(select(DailyReadTime).order_by(DailyReadTime.date)).all()
-    rows = rows[-days:]
+    # Most recent `days` days, returned oldest-first for charting.
+    rows = session.exec(
+        select(DailyReadTime).order_by(DailyReadTime.date.desc()).limit(days)
+    ).all()
     return [
         {"date": r.date, "seconds": r.seconds, "minutes": round(r.seconds / 60, 1)}
-        for r in rows
+        for r in reversed(rows)
     ]
 
 
@@ -237,8 +240,6 @@ def _current_streak(rows: list[DailyReadTime]) -> int:
     active = {r.date for r in rows if r.seconds > 0}
     if not active:
         return 0
-    from datetime import timedelta
-
     cur = max(parse_date(d) for d in active)
     streak = 0
     while cur.strftime("%Y-%m-%d") in active:
@@ -368,3 +369,69 @@ def last_pull(session: Session) -> PullRun | None:
     return session.exec(
         select(PullRun).where(PullRun.ok == True).order_by(PullRun.finished_at.desc())  # noqa: E712
     ).first()
+
+
+# --------------------------------------------------------------------------
+# Accounts (admin + normal users). Hashing lives in app.auth; we only store.
+# --------------------------------------------------------------------------
+
+
+def get_user(session: Session, username: str) -> AppUser | None:
+    return session.get(AppUser, username)
+
+
+def list_users(session: Session) -> list[AppUser]:
+    return session.exec(select(AppUser).order_by(AppUser.username)).all()
+
+
+def has_admin(session: Session) -> bool:
+    return session.exec(
+        select(AppUser).where(AppUser.is_admin == True)  # noqa: E712
+    ).first() is not None
+
+
+def create_user(
+    session: Session, username: str, password_hash: str, is_admin: bool = False, must_change: bool = False
+) -> AppUser:
+    user = AppUser(
+        username=username, password_hash=password_hash, is_admin=is_admin, must_change=must_change
+    )
+    session.add(user)
+    return user
+
+
+def set_password(
+    session: Session, username: str, password_hash: str, must_change: bool = False
+) -> AppUser | None:
+    user = session.get(AppUser, username)
+    if user is None:
+        return None
+    user.password_hash = password_hash
+    user.must_change = must_change
+    user.updated_at = datetime.now(timezone.utc)
+    session.add(user)
+    return user
+
+
+def delete_user(session: Session, username: str) -> None:
+    user = session.get(AppUser, username)
+    if user is not None:
+        session.delete(user)
+
+
+def rename_user(session: Session, old: str, new: str) -> AppUser | None:
+    """Move an account to a new username (the primary key), keeping its fields."""
+    user = session.get(AppUser, old)
+    if user is None:
+        return None
+    fresh = AppUser(
+        username=new,
+        password_hash=user.password_hash,
+        is_admin=user.is_admin,
+        must_change=user.must_change,
+        created_at=user.created_at,
+    )
+    session.delete(user)
+    session.flush()
+    session.add(fresh)
+    return fresh

@@ -13,7 +13,7 @@
 <div class="folder-title">{{ group.name }} <span class="count">{{ group.books|length }} 本</span></div>
 <div class="book-grid">
   {% for b in group.books %}
-  <div class="book">
+  <a class="book" href="/book/{{ b.book_id }}">
     {% if b.cover %}<img class="cover" src="{{ b.cover }}" alt="" loading="lazy">{% else %}<div class="cover"></div>{% endif %}
     <div class="meta">
       <div class="title">{{ b.title }}</div>
@@ -25,7 +25,7 @@
         <div class="author" style="margin-top:3px">{{ b.progress }}%</div>
       {% endif %}
     </div>
-  </div>
+  </a>
   {% endfor %}
 </div>
 {% endfor %}

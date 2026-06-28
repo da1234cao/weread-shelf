@@ -8,14 +8,14 @@
 {% else %}
 <div class="book-grid">
   {% for r in recs %}
-  <div class="book">
+  <a class="book" href="/book/{{ r.book_id }}">
     {% if r.cover %}<img class="cover" src="{{ r.cover }}" alt="" loading="lazy">{% else %}<div class="cover"></div>{% endif %}
     <div class="meta">
       <div class="title">{{ r.title }}</div>
       <div class="author">{{ r.author }}</div>
       {% if r.category %}<div style="margin-top:6px"><span class="badge">{{ r.category }}</span></div>{% endif %}
     </div>
-  </div>
+  </a>
   {% endfor %}
 </div>
 {% endif %}

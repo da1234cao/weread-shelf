@@ -11,11 +11,13 @@
     <div class="inner">
       <div class="brand">微信读书<span>·看板</span></div>
       <nav class="tabs">
-        <a href="/" class="{{ 'active' if active == 'overview' }}">概览</a>
+        {% if nav.show_overview %}<a href="/" class="{{ 'active' if active == 'overview' }}">概览</a>{% endif %}
         <a href="/shelf" class="{{ 'active' if active == 'shelf' }}">书架</a>
         <a href="/notes" class="{{ 'active' if active == 'notes' }}">笔记</a>
-        <a href="/discover" class="{{ 'active' if active == 'discover' }}">发现</a>
+        {% if nav.show_discover %}<a href="/discover" class="{{ 'active' if active == 'discover' }}">发现</a>{% endif %}
       </nav>
+      {% if cur_user and cur_user.is_admin %}<a class="navlink" href="/admin">管理</a>{% endif %}
+      {% if cur_user %}<a class="navlink" href="/logout">退出</a>{% else %}<a class="navlink" href="/login">登录</a>{% endif %}
       <button class="refresh-btn" onclick="refreshNow(this)">立即刷新</button>
     </div>
   </header>

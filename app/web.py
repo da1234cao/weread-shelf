@@ -1,4 +1,4 @@
-"""FastAPI application: dashboard pages, JSON API, manual refresh, scheduler."""
+"""FastAPI application: dashboard pages, JSON API, admin page, auth, scheduler."""
 
 from __future__ import annotations
 
@@ -7,17 +7,21 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from . import auth
 from . import repository as repo
-from .config import get_settings
+from . import settings_store
+from .client import WeReadClient
 from .db import init_db, session_scope
 from .fetcher import run_daily_pull
-from .scheduler import shutdown_scheduler, start_scheduler
+from .models import AppUser, Book
+from .scheduler import reschedule, shutdown_scheduler, start_scheduler
 from .utils import fmt_duration
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -29,6 +33,9 @@ templates.env.filters["duration"] = fmt_duration
 
 # Guards against overlapping pulls (startup, scheduler, manual refresh).
 _pull_lock = threading.Lock()
+
+# Paths reachable without authentication even when "require login" is on.
+_PUBLIC_PREFIXES = ("/login", "/logout", "/static", "/api/health", "/favicon.ico")
 
 
 def _run_pull_locked(kind: str) -> None:
@@ -48,17 +55,25 @@ def _has_any_data() -> bool:
         return repo.last_pull(session) is not None
 
 
+def _bootstrap() -> None:
+    """Ensure the settings row and a default admin account exist."""
+    settings_store.get()  # seeds the row + session secret
+    with session_scope() as session:
+        if not repo.has_admin(session):
+            repo.create_user(
+                session, "admin", auth.hash_password("admin"), is_admin=True, must_change=True
+            )
+            logger.info("seeded default admin account (admin/admin) — change it on first login")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    settings = get_settings()
-    if settings.has_api_key:
-        start_scheduler()
-        if settings.pull_on_startup and not _has_any_data():
-            logger.info("no data yet; kicking off initial pull in background")
-            threading.Thread(target=_run_pull_locked, args=("startup",), daemon=True).start()
-    else:
-        logger.warning("WEREAD_API_KEY not set; scheduler/pull disabled (UI still serves)")
+    _bootstrap()
+    start_scheduler()
+    if settings_store.get().api_key and not _has_any_data():
+        logger.info("no data yet; kicking off initial pull in background")
+        threading.Thread(target=_run_pull_locked, args=("startup",), daemon=True).start()
     yield
     shutdown_scheduler()
 
@@ -68,47 +83,283 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 
 
 # --------------------------------------------------------------------------
+# Access control
+# --------------------------------------------------------------------------
+def _is_public_path(path: str) -> bool:
+    return path.startswith(_PUBLIC_PREFIXES)
+
+
+@app.middleware("http")
+async def access_control(request: Request, call_next):
+    path = request.url.path
+    user = auth.current_user(request)
+    request.state.user = user  # reused by handlers/_render this request
+
+    if path == "/admin" or path.startswith("/admin/"):
+        if not (user and user.is_admin):
+            return RedirectResponse(f"/login?next={path}", status_code=303)
+        # Until default credentials are changed, only the dashboard + account form work.
+        if user.must_change and path not in ("/admin", "/admin/account"):
+            return RedirectResponse("/admin", status_code=303)
+    elif settings_store.get().require_user_auth and not _is_public_path(path):
+        if user is None:
+            return RedirectResponse(f"/login?next={path}", status_code=303)
+
+    return await call_next(request)
+
+
+def _current(request: Request) -> AppUser | None:
+    return getattr(request.state, "user", None)
+
+
+def _render(request: Request, name: str, **ctx):
+    s = settings_store.get()
+    base = {
+        "nav": {"show_overview": s.show_overview, "show_discover": s.show_discover},
+        "cur_user": _current(request),
+    }
+    return templates.TemplateResponse(request, name, {**base, **ctx})
+
+
+def _require_admin(request: Request) -> AppUser:
+    user = _current(request)
+    if not (user and user.is_admin):
+        raise HTTPException(status_code=403, detail="admin only")
+    return user
+
+
+def _require_admin_ready(request: Request) -> AppUser:
+    user = _require_admin(request)
+    if user.must_change:
+        raise HTTPException(status_code=403, detail="change the default credentials first")
+    return user
+
+
+# --------------------------------------------------------------------------
 # Pages
 # --------------------------------------------------------------------------
 @app.get("/")
 def page_overview(request: Request):
+    if not settings_store.get().show_overview:
+        return RedirectResponse("/shelf", status_code=303)
     with session_scope() as session:
         ctx = {
             "overview": repo.overview(session),
             "monthly": repo.latest_snapshot(session, "monthly"),
             "overall": repo.latest_snapshot(session, "overall"),
         }
-    return templates.TemplateResponse(request, "overview.html", {"active": "overview", **ctx})
+    return _render(request, "overview.html", active="overview", **ctx)
 
 
 @app.get("/shelf")
 def page_shelf(request: Request):
     with session_scope() as session:
         shelf = repo.current_shelf(session)
-    return templates.TemplateResponse(request, "shelf.html", {"active": "shelf", "shelf": shelf})
+    return _render(request, "shelf.html", active="shelf", shelf=shelf)
 
 
 @app.get("/notes")
 def page_notes(request: Request):
     with session_scope() as session:
         books = repo.books_with_notes(session)
-    return templates.TemplateResponse(request, "notes.html", {"active": "notes", "books": books})
+    return _render(request, "notes.html", active="notes", books=books)
 
 
-@app.get("/notes/{book_id}")
-def page_note_detail(request: Request, book_id: str):
+@app.get("/book/{book_id}")
+def page_book(request: Request, book_id: str):
+    _maybe_enrich(book_id)
     with session_scope() as session:
         data = repo.book_notes(session, book_id)
     if data["book"] is None and not data["chapters"]:
         raise HTTPException(status_code=404, detail="book not found")
-    return templates.TemplateResponse(request, "note_detail.html", {"active": "notes", **data})
+    return _render(request, "book_detail.html", active="", **data)
 
 
 @app.get("/discover")
 def page_discover(request: Request):
+    if not settings_store.get().show_discover:
+        return RedirectResponse("/", status_code=303)
     with session_scope() as session:
         recs = repo.current_recommendations(session)
-    return templates.TemplateResponse(request, "discover.html", {"active": "discover", "recs": recs})
+    return _render(request, "discover.html", active="discover", recs=recs)
+
+
+def _maybe_enrich(book_id: str) -> None:
+    """Lazily fetch /book/info once per book and cache it (needs a configured key)."""
+    if not settings_store.get().api_key:
+        return
+    with session_scope() as session:
+        book = session.get(Book, book_id)
+        if book is not None and book.info_fetched:
+            return
+    try:
+        with WeReadClient() as client:
+            info = client.book_info(book_id)
+    except Exception as exc:
+        logger.warning("book_info failed for %s: %s", book_id, exc)
+        return
+
+    def _to_int(value) -> int:
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return 0
+
+    def _str(value) -> str:
+        return value if isinstance(value, str) else ""
+
+    with session_scope() as session:
+        repo.upsert_book(
+            session, book_id,
+            title=_str(info.get("title")), author=_str(info.get("author")),
+            translator=_str(info.get("translator")), cover=_str(info.get("cover")),
+            category=_str(info.get("category")), intro=_str(info.get("intro")),
+            publisher=_str(info.get("publisher")), publish_time=_str(info.get("publishTime")),
+            isbn=_str(info.get("isbn")), rating=_to_int(info.get("newRating")),
+            rating_count=_to_int(info.get("newRatingCount")),
+        )
+        book = session.get(Book, book_id)
+        if book is not None:
+            book.info_fetched = 1
+            session.add(book)
+
+
+# --------------------------------------------------------------------------
+# Auth pages
+# --------------------------------------------------------------------------
+@app.get("/login")
+def login_form(request: Request, next: str = "/"):
+    return _render(request, "login.html", next=next, error=None)
+
+
+@app.post("/login")
+def login_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    next: str = Form("/"),
+):
+    user = auth.authenticate(username, password)
+    if user is None:
+        return _render(request, "login.html", next=next, error="用户名或密码错误")
+    # Only allow same-site redirect targets (guard against open redirect).
+    if not next.startswith("/") or next.startswith("//"):
+        next = "/"
+    target = "/admin" if user.is_admin and user.must_change else next
+    resp = RedirectResponse(target, status_code=303)
+    resp.set_cookie(auth.COOKIE, auth.make_token(user.username), httponly=True, samesite="lax")
+    return resp
+
+
+@app.get("/logout")
+def logout():
+    resp = RedirectResponse("/", status_code=303)
+    resp.delete_cookie(auth.COOKIE)
+    return resp
+
+
+# --------------------------------------------------------------------------
+# Admin page
+# --------------------------------------------------------------------------
+@app.get("/admin")
+def admin_home(request: Request):
+    user = _require_admin(request)
+    s = settings_store.get()
+    with session_scope() as session:
+        users = repo.list_users(session)
+        last = repo.last_pull(session)
+    upgrade = bool(s.suggested_skill_version and s.suggested_skill_version != s.skill_version)
+    return _render(
+        request, "admin.html",
+        s=s, users=users, last_pull=last, upgrade_available=upgrade,
+        must_change=user.must_change, saved=request.query_params.get("saved"),
+        has_key=bool(s.api_key),
+    )
+
+
+@app.post("/admin/settings")
+def admin_settings(
+    request: Request,
+    show_overview: bool = Form(False),
+    show_discover: bool = Form(False),
+    require_user_auth: bool = Form(False),
+    pull_interval_hours: int = Form(24),
+    timezone: str = Form("Asia/Shanghai"),
+    skill_version: str = Form("1.0.3"),
+):
+    _require_admin_ready(request)
+    try:
+        ZoneInfo(timezone)
+    except Exception:
+        timezone = settings_store.get().timezone
+    if pull_interval_hours not in (6, 12, 24):
+        pull_interval_hours = 24
+    settings_store.save(
+        show_overview=show_overview, show_discover=show_discover,
+        require_user_auth=require_user_auth, pull_interval_hours=pull_interval_hours,
+        timezone=timezone, skill_version=(skill_version or "").strip() or "1.0.3",
+    )
+    reschedule()
+    return RedirectResponse("/admin?saved=settings", status_code=303)
+
+
+@app.post("/admin/apikey")
+def admin_apikey(request: Request, api_key: str = Form(...)):
+    _require_admin_ready(request)
+    api_key = api_key.strip()
+    if not api_key.startswith("wrk-"):
+        return RedirectResponse("/admin?saved=apikey_bad", status_code=303)
+    try:
+        with WeReadClient(api_key=api_key) as client:
+            client.shelf_sync()
+    except Exception as exc:
+        logger.warning("API key test call failed: %s", exc)
+        return RedirectResponse("/admin?saved=apikey_fail", status_code=303)
+    settings_store.save(api_key=api_key)
+    return RedirectResponse("/admin?saved=apikey", status_code=303)
+
+
+@app.post("/admin/account")
+def admin_account(request: Request, username: str = Form(...), password: str = Form(...)):
+    user = _require_admin(request)  # allowed even while must_change
+    username = username.strip()
+    if not username or not password:
+        return RedirectResponse("/admin?saved=account_bad", status_code=303)
+    with session_scope() as session:
+        if username != user.username:
+            if repo.get_user(session, username) is not None:
+                return RedirectResponse("/admin?saved=account_taken", status_code=303)
+            repo.rename_user(session, user.username, username)
+        repo.set_password(session, username, auth.hash_password(password), must_change=False)
+    resp = RedirectResponse("/admin?saved=account", status_code=303)
+    resp.set_cookie(auth.COOKIE, auth.make_token(username), httponly=True, samesite="lax")
+    return resp
+
+
+@app.post("/admin/users")
+def admin_users(
+    request: Request,
+    action: str = Form(...),
+    username: str = Form(...),
+    password: str = Form(""),
+):
+    _require_admin_ready(request)
+    username = username.strip()
+    with session_scope() as session:
+        existing = repo.get_user(session, username)
+        if action == "delete":
+            if existing is not None and not existing.is_admin:
+                repo.delete_user(session, username)
+        elif action == "create":
+            if not username or not password:
+                return RedirectResponse("/admin?saved=user_bad", status_code=303)
+            if existing is not None:
+                return RedirectResponse("/admin?saved=user_taken", status_code=303)
+            repo.create_user(session, username, auth.hash_password(password))
+        elif action == "password":
+            if existing is not None and not existing.is_admin and password:
+                repo.set_password(session, username, auth.hash_password(password))
+    return RedirectResponse("/admin?saved=users", status_code=303)
 
 
 # --------------------------------------------------------------------------
@@ -186,8 +437,8 @@ def export_notes_md(book_id: str):
 
 @app.post("/api/refresh")
 def api_refresh():
-    if not get_settings().has_api_key:
-        raise HTTPException(status_code=400, detail="WEREAD_API_KEY not configured")
+    if not settings_store.get().api_key:
+        raise HTTPException(status_code=400, detail="API key not configured")
     if _pull_lock.locked():
         return JSONResponse({"status": "already_running"}, status_code=202)
     threading.Thread(target=_run_pull_locked, args=("manual",), daemon=True).start()

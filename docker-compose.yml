@@ -4,7 +4,6 @@ services:
     image: weread-shelf:latest
     container_name: weread-shelf
     restart: unless-stopped
-    env_file: .env
     ports:
       - "8765:8765"
     volumes:

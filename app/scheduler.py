@@ -1,39 +1,58 @@
-"""APScheduler integration: a daily cron job that runs the pull."""
+"""APScheduler integration: an interval job that runs the pull.
+
+The interval (hours) comes from ``app_settings`` and can be changed from the
+admin page without a restart via :func:`reschedule`. Interval triggers fire
+every N hours from start, so they're timezone-independent.
+"""
 
 from __future__ import annotations
 
 import logging
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
-from .config import get_settings
+from . import settings_store
 from .fetcher import run_daily_pull
 
 logger = logging.getLogger(__name__)
 
+_JOB_ID = "pull"
 _scheduler: BackgroundScheduler | None = None
 
 
 def _job() -> None:
+    if not settings_store.get().api_key:
+        logger.info("scheduled pull skipped: API key not configured")
+        return
     try:
         run_daily_pull(kind="daily")
     except Exception:
         logger.exception("scheduled pull failed")
 
 
+def _trigger() -> IntervalTrigger:
+    hours = max(1, settings_store.get().pull_interval_hours)
+    return IntervalTrigger(hours=hours)
+
+
 def start_scheduler() -> BackgroundScheduler:
     global _scheduler
     if _scheduler is not None:
         return _scheduler
-    settings = get_settings()
-    sched = BackgroundScheduler(timezone=settings.tz)
-    trigger = CronTrigger.from_crontab(settings.pull_cron, timezone=settings.tz)
-    sched.add_job(_job, trigger, id="daily_pull", replace_existing=True, max_instances=1)
+    sched = BackgroundScheduler()
+    sched.add_job(_job, _trigger(), id=_JOB_ID, replace_existing=True, max_instances=1)
     sched.start()
-    logger.info("scheduler started: cron=%r tz=%s", settings.pull_cron, settings.tz)
+    logger.info("scheduler started: every %dh", settings_store.get().pull_interval_hours)
     _scheduler = sched
     return sched
+
+
+def reschedule() -> None:
+    """Apply a changed pull interval to the running job."""
+    if _scheduler is not None:
+        _scheduler.reschedule_job(_JOB_ID, trigger=_trigger())
+        logger.info("scheduler rescheduled: every %dh", settings_store.get().pull_interval_hours)
 
 
 def shutdown_scheduler() -> None:

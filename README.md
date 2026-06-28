@@ -4,6 +4,9 @@
 **长期趋势**（阅读时长曲线、书架进度、笔记/划线增量、个性化推荐）——这些是官方 App
 本身不长期保留的东西。专为 Linux + 容器部署设计。
 
+所有配置（API Key、调度、时区、模块显隐、访问控制、账号）都在**管理页面**里完成，
+**没有 `.env` 文件**。
+
 ## 数据来源：官方 Agent API Gateway
 
 所有数据都来自官方 skill 背后的 HTTP 网关，使用一个**长期有效**、自动绑定你账号的
@@ -17,87 +20,49 @@ Content-Type: application/json
 {"api_name": "/readdata/detail", "skill_version": "1.0.3", "mode": "monthly"}
 ```
 
-用到的接口（完整目录可用 `python cli.py probe /_list` 查看）：
-
-| 用途 | api_name | 说明 |
-|------|----------|------|
-| 阅读统计 | `/readdata/detail` | `mode`=weekly/monthly/annually/overall；`readTimes` 是 `{时间戳:秒}` 的每日序列 |
-| 书架 | `/shelf/sync` | 全部书籍 + `archive` 分组 + `finishReading` |
-| 笔记本概览 | `/user/notebooks` | 每本书的进度、划线数、想法数（分页 `lastSort`） |
-| 划线 | `/book/bookmarklist` | 用户的划线（`markText`），含 `removed` 删除列表 |
-| 想法 | `/review/list/mine` | 用户的个人想法（参数是小写 `bookid`） |
-| 推荐 | `/book/recommend` | 个性化推荐 |
-
-> 所有时长字段单位为**秒**。
-
-## 获取 API Key
-
-登录 https://weread.qq.com/r/weread-skills ，在页面生成 `wrk-` 开头的 API Key，
-填入 `.env` 的 `WEREAD_API_KEY`。
+接口目录与字段说明见 [doc/api.md](doc/api.md)；产品需求见 [doc/requirements.md](doc/requirements.md)。
 
 ## 快速开始（容器部署）
 
 ```bash
-cp .env.example .env       # 填入 WEREAD_API_KEY
 docker compose up -d --build
-# 首次启动若无数据会自动后台拉取一次；也可手动触发：
-curl -X POST http://localhost:8765/api/refresh
-# 打开看板
 open http://localhost:8765
 ```
 
-SQLite 存放在挂载卷 `./data/weread.db`，容器重建后数据仍在。每天按 `PULL_CRON`
-（默认 `0 3 * * *`，即每天 03:00）自动拉取。
+首次启动后：
+
+1. 打开 `http://localhost:8765/admin`，用默认账号 **`admin` / `admin`** 登录。
+2. 系统会**强制你先修改用户名和密码**。
+3. 登录 https://weread.qq.com/r/weread-skills 生成 `wrk-` 开头的 API Key，
+   在管理页「网关连接」里填入（保存时会试调网关校验）。
+4. 配置好 Key 后会自动开始首次拉取；也可在管理页点「立即刷新」。
+
+SQLite 存放在挂载卷 `/data/weread.db`（compose 中映射为命名卷 `weread_db_data`），
+容器重建后数据仍在。拉取间隔默认每 24 小时，可在管理页改为 6 / 12 / 24 小时。
+
+## 管理页面 `/admin`
+
+- **网关连接**：填入 / 替换 API Key（只写不回显）。
+- **设置**：显隐「概览」「发现」模块；普通用户是否需要登录；拉取间隔；时区；`skill_version`。
+- **拉取状态**：上次拉取时间 / 结果，以及「立即刷新」按钮。
+- **用户管理**：创建 / 改密 / 删除普通用户（仅当开启「需要登录」时才用得上）。
+- **我的账号**：随时修改管理员自己的用户名和密码。
+- 当网关建议升级 `skill_version` 时，管理页会给出提示。
 
 ## 本地开发
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env        # 填入 WEREAD_API_KEY
+
+python cli.py serve         # 启动 Web + 调度器（http://localhost:8765）
+# 然后在 /admin 配置 API Key（CLI 也从 DB 读 key，需先在网页配置一次）
 
 python cli.py pull          # 一次性拉取全部数据
 python cli.py backfill -m 13   # 回填最近 13 个月的每日阅读时长历史
-python cli.py serve         # 启动 Web + 调度器（http://localhost:8765）
 python cli.py probe /readdata/detail -p mode=overall   # 调试：原始网关调用
 pytest                      # 运行测试
 ```
 
-## 配置项（环境变量 / `.env`）
-
-| 变量 | 默认 | 说明 |
-|------|------|------|
-| `WEREAD_API_KEY` | — | 必填，`wrk-` 开头 |
-| `TZ` | `Asia/Shanghai` | 日界与调度时区 |
-| `PULL_CRON` | `0 3 * * *` | 每日拉取的 cron 表达式 |
-| `PORT` | `8765` | 看板端口 |
-| `DB_PATH` | `./data/weread.db`（容器内 `/data/weread.db`） | SQLite 路径 |
-| `SKILL_VERSION` | `1.0.3` | 网关协议版本 |
-
-## 架构
-
-```
-APScheduler (每日 cron) ─┐
-POST /api/refresh ───────┼─→ fetcher.run_daily_pull()
-首次启动自动拉取 ─────────┘        │  WeReadClient → i.weread.qq.com/api/agent/gateway
-                                   ▼
-                          SQLite（带日期的快照，可算趋势）
-                                   ▼
-                 FastAPI：Jinja2 看板页 + JSON API + Markdown 导出
-```
-
-- `app/client.py` — 网关封装（重试、限速、鉴权错误识别）
-- `app/models.py` / `app/db.py` — SQLModel 表与 SQLite 引擎
-- `app/fetcher.py` — 每日拉取与历史回填（单本失败不影响整体）
-- `app/repository.py` — 入库去重 + 看板聚合查询
-- `app/scheduler.py` — APScheduler cron
-- `app/web.py` — FastAPI 路由 / 页面 / JSON API / `/api/refresh`
-- `cli.py` — `pull` / `backfill` / `probe` / `serve`
-
-页面：`/` 概览（趋势图） · `/shelf` 书架 · `/notes` 笔记（可导出 Markdown） · `/discover` 推荐。
-
-## 安全
-
-- 默认**私网 / 无鉴权**，请只在可信内网或本机访问。
-- `.env`（含 API Key）已被 `.gitignore` 忽略，不要提交。
-- 若要暴露公网，请在反向代理层加鉴权，或在 `app/web.py` 增加 Token 中间件。
+数据库路径默认 `./data/weread.db`，可用环境变量 `DB_PATH` 覆盖（容器内为 `/data/weread.db`）。
+除 `DB_PATH` 这一基础设施项外，其余配置一律在管理页里改。
