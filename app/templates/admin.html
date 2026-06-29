@@ -57,10 +57,13 @@
           {% for h in [6, 12, 24] %}<option value="{{ h }}" {{ 'selected' if s.pull_interval_hours == h }}>每 {{ h }} 小时</option>{% endfor %}
         </select>
       </label>
-      <label>数据保留（仅书架/统计/推荐快照，到期自动删除；阅读时长与笔记不受影响）
+      <label>数据保留（仅书架/推荐快照，到期自动删除；阅读统计与笔记不受影响）
         <select name="retention_days">
           {% for v, label in retention_choices %}<option value="{{ v }}" {{ 'selected' if s.retention_days == v }}>{{ label }}</option>{% endfor %}
         </select>
+      </label>
+      <label>网关调用间隔（秒，越小拉取越快但更易触发限流；0.05–5）
+        <input type="number" name="gateway_interval" min="0.05" max="5" step="0.05" value="{{ s.gateway_interval }}">
       </label>
       <label>时区
         <select name="timezone">

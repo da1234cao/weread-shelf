@@ -70,6 +70,10 @@ def _migrate(engine) -> None:
         settings_cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(app_settings)")}
         if settings_cols and "retention_days" not in settings_cols:
             conn.exec_driver_sql("ALTER TABLE app_settings ADD COLUMN retention_days INTEGER NOT NULL DEFAULT 0")
+        if settings_cols and "gateway_interval" not in settings_cols:
+            conn.exec_driver_sql("ALTER TABLE app_settings ADD COLUMN gateway_interval FLOAT NOT NULL DEFAULT 0.2")
+        if settings_cols and "stats_backfilled" not in settings_cols:
+            conn.exec_driver_sql("ALTER TABLE app_settings ADD COLUMN stats_backfilled BOOLEAN NOT NULL DEFAULT 0")
 
 
 @contextmanager

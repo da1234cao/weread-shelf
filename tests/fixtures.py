@@ -1,39 +1,64 @@
 """Synthetic gateway responses matching the real shapes (no personal data)."""
 
-# /readdata/detail mode=monthly  (readTimes keyed by UTC+8 day-start timestamps)
+# /readdata/detail — readTimes granularity differs by mode: weekly/monthly are
+# per-day, annually is per-month, overall is per-year. readStat (读过/读完/阅读/
+# 笔记) is absent for weekly. registTime bounds the first-pull backfill.
+
+# monthly: per-day buckets
 MONTHLY = {
     "readTimes": {
         "1780243200": 3600,   # 2026-06-01
         "1780329600": 1800,   # 2026-06-02
-        "1780416000": 0,      # 2026-06-03 (skipped, <=0)
+        "1780416000": 0,      # 2026-06-03 (zero day)
         "1780502400": 7200,   # 2026-06-04
     },
     "readDays": 3,
     "dayAverageReadTime": 4200,
     "totalReadTime": 12600,
-    "compare": 0.2,
-    "preferCategory": [
-        {"categoryTitle": "历史", "readingTime": 20521, "readingCount": 1},
+    "readStat": [
+        {"stat": "读过", "counts": "2本"}, {"stat": "读完", "counts": "0本"},
+        {"stat": "阅读", "counts": "3天"}, {"stat": "笔记", "counts": "5条"},
     ],
+    "preferCategory": [{"categoryTitle": "历史", "readingTime": 20521, "readingCount": 1}],
 }
 
+# annually: per-month buckets (12 in production; 2 here is enough)
+ANNUALLY = {
+    "readTimes": {"1767196800": 100000, "1769875200": 80000},
+    "readDays": 50,
+    "dayAverageReadTime": 3600,
+    "totalReadTime": 180000,
+    "readStat": [
+        {"stat": "读过", "counts": "15本"}, {"stat": "读完", "counts": "3本"},
+        {"stat": "阅读", "counts": "50天"}, {"stat": "笔记", "counts": "102条"},
+    ],
+    "preferCategory": [{"categoryTitle": "玄幻小说", "readingTime": 90000, "readingCount": 5}],
+}
+
+# overall: per-year buckets, with the leading zero years that normalize() trims.
 OVERALL = {
-    "readTimes": {"1767196800": 677539},
+    "readTimes": {"1514764800": 0, "1546300800": 0, "1577836800": 677539},  # 2018/2019/2020
     "readDays": 845,
     "totalReadTime": 5844393,
     "readRate": 79,
     "wrReadTime": 4648188,
     "wrListenTime": 1196205,
+    "readStat": [
+        {"stat": "读过", "counts": "118本"}, {"stat": "读完", "counts": "44本"},
+        {"stat": "阅读", "counts": "845天"}, {"stat": "笔记", "counts": "2964条"},
+    ],
     "preferCategory": [
         {"categoryTitle": "影视原著", "readingTime": 1110145, "readingCount": 18},
         {"categoryTitle": "历史", "readingTime": 900000, "readingCount": 9},
     ],
     "preferAuthor": [{"name": "江南", "count": 2, "readTime": "58小时18分钟"}],
     "preferTime": [96167] + [1000] * 23,
-    "readStat": [{"stat": "读过", "counts": "118本"}],
+    "registTime": 1577836800,
 }
 
-WEEKLY = {"readTimes": {"1782489600": 2432}, "readDays": 1, "totalReadTime": 2432}
+# weekly: per-day buckets, and no readStat.
+WEEKLY = {"readTimes": {"1782489600": 2432}, "readDays": 1, "totalReadTime": 2432,
+          "dayAverageReadTime": 2432}
 
 SHELF = {
     "books": [

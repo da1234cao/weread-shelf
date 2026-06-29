@@ -32,8 +32,8 @@
     }
 
     const sleep = (ms) => new Promise(res => setTimeout(res, ms));
-    const COUNT_LABELS = { shelf: '书架', books: '书籍', bookmarks: '划线',
-                           reviews: '想法', recs: '推荐', chapters: '章节', days: '天数' };
+    const COUNT_LABELS = { stats: '统计', shelf: '书架', books: '书籍', bookmarks: '划线',
+                           reviews: '想法', recs: '推荐', chapters: '章节' };
 
     function countsSummary(counts) {
       if (!counts) return '';

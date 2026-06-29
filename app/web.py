@@ -18,6 +18,7 @@ from . import auth
 from . import fetcher
 from . import repository as repo
 from . import settings_store
+from . import stats
 from .client import WeReadClient
 from .db import init_db, session_scope
 from .models import AppUser
@@ -146,13 +147,8 @@ def _require_admin_ready(request: Request) -> AppUser:
 def page_overview(request: Request):
     if not settings_store.get().show_overview:
         return RedirectResponse("/shelf", status_code=303)
-    with session_scope() as session:
-        ctx = {
-            "overview": repo.overview(session),
-            "monthly": repo.latest_snapshot(session, "monthly"),
-            "overall": repo.latest_snapshot(session, "overall"),
-        }
-    return _render(request, "overview.html", active="overview", **ctx)
+    # All data is loaded client-side from /api/stats (a pure DB read).
+    return _render(request, "overview.html", active="overview")
 
 
 @app.get("/shelf")
@@ -251,6 +247,7 @@ def admin_settings(
     require_user_auth: bool = Form(False),
     pull_interval_hours: int = Form(24),
     retention_days: int = Form(0),
+    gateway_interval: float = Form(0.2),
     timezone: str = Form("Asia/Shanghai"),
     skill_version: str = Form("1.0.3"),
 ):
@@ -263,10 +260,11 @@ def admin_settings(
         pull_interval_hours = 24
     if retention_days not in {days for days, _ in RETENTION_CHOICES}:
         retention_days = 0
+    gateway_interval = min(max(gateway_interval, 0.05), 5.0)
     settings_store.save(
         show_overview=show_overview, show_discover=show_discover,
         require_user_auth=require_user_auth, pull_interval_hours=pull_interval_hours,
-        retention_days=retention_days,
+        retention_days=retention_days, gateway_interval=gateway_interval,
         timezone=timezone, skill_version=(skill_version or "").strip() or "1.0.3",
     )
     reschedule()
@@ -346,27 +344,31 @@ def api_health():
     return {"status": "ok"}
 
 
-@app.get("/api/overview")
-def api_overview():
-    with session_scope() as session:
-        ov = repo.overview(session)
-        ov.pop("last_pull", None)
-        return ov
+@app.get("/api/stats")
+def api_stats(mode: str = "monthly", offset: int = 0):
+    """One period's display stats (pure DB read; the pull populates period_stat).
 
-
-@app.get("/api/stats/trend")
-def api_trend(days: int = 120):
+    `period_label` / `has_prev` / `has_next` are time-relative, so they're computed
+    here rather than stored. A period not yet fetched returns ``{empty: true}``.
+    """
+    if mode not in stats.MODES:
+        raise HTTPException(status_code=400, detail="unknown mode")
+    offset = min(offset, 0)  # no future periods
+    base_time = stats.base_time_for(mode, offset)
     with session_scope() as session:
-        daily = repo.daily_trend(session, days=days)
-        monthly = repo.monthly_trend(session)
-        overall = repo.latest_snapshot(session, "overall")
-        payload = json.loads(overall.payload_json) if overall else {}
+        payload = repo.get_period_stat(session, mode, base_time)
+        if payload is None:
+            return {"empty": True, "mode": mode, "offset": offset}
+        has_prev = mode != "overall" and repo.has_period_stat(
+            session, mode, stats.base_time_for(mode, offset - 1)
+        )
     return {
-        "daily": daily,
-        "monthly": monthly,
-        "preferCategory": payload.get("preferCategory", []),
-        "preferAuthor": payload.get("preferAuthor", []),
-        "preferTime": payload.get("preferTime", []),
+        **payload,
+        "mode": mode,
+        "offset": offset,
+        "period_label": stats.period_label(mode, offset, base_time),
+        "has_prev": has_prev,
+        "has_next": offset < 0,
     }
 
 

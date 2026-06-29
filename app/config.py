@@ -19,12 +19,11 @@ class Settings(BaseSettings):
     # Storage. Container overrides this to /data/weread.db.
     db_path: str = "./data/weread.db"
 
-    # WeRead gateway HTTP tuning (not user-configurable).
+    # WeRead gateway HTTP tuning. (The per-call delay is user-tunable and lives in
+    # AppSettings.gateway_interval instead — see app.client._throttle.)
     weread_base_url: str = "https://i.weread.qq.com/api/agent/gateway"
     request_timeout: float = 20.0
     max_retries: int = 3
-    # Polite delay (seconds) between successive gateway calls in a pull run.
-    request_interval: float = 0.5
 
     # Web server port (used by `cli.py serve`; the container hardcodes 8765).
     port: int = 8765

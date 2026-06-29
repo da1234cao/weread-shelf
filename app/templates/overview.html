@@ -1,33 +1,30 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>阅读概览</h1>
-<div class="sub">
-  {% if overview.last_pull %}
-    上次成功拉取：{{ overview.last_pull.finished_at | localtime }} {{ tz }}
-  {% else %}
-    暂无数据，请到管理页点击「立即刷新」开始首次拉取。
-  {% endif %}
+
+<div class="subtabs" id="modeTabs">
+  <button class="subtab" data-mode="weekly">周</button>
+  <button class="subtab active" data-mode="monthly">月</button>
+  <button class="subtab" data-mode="annually">年</button>
+  <button class="subtab" data-mode="overall">总</button>
 </div>
 
-<div class="cards">
-  <div class="card kpi"><div class="label">累计阅读时长</div><div class="value">{{ overview.total_read_time_h }}</div></div>
-  <div class="card kpi"><div class="label">累计阅读天数</div><div class="value">{{ overview.read_days }} <small>天</small></div></div>
-  <div class="card kpi"><div class="label">本月阅读</div><div class="value">{{ overview.month_read_time_h }}</div></div>
-  <div class="card kpi"><div class="label">当前连续阅读</div><div class="value">{{ overview.streak }} <small>天</small></div></div>
-  {% for s in overview.read_stat %}
-  <div class="card kpi"><div class="label">{{ s.stat }}</div><div class="value">{{ s.counts }}</div></div>
-  {% endfor %}
+<div class="period-nav" id="periodNav">
+  <button id="prevBtn" class="period-btn" aria-label="上一周期">‹</button>
+  <span id="periodLabel" class="period-label">…</span>
+  <button id="nextBtn" class="period-btn" aria-label="下一周期">›</button>
+</div>
+
+<div class="cards" id="statCards"></div>
+
+<div class="section">
+  <h2>阅读时长分布</h2>
+  <div class="chart-card"><canvas id="distChart" height="90"></canvas></div>
 </div>
 
 <div class="section">
-  <h2>每日阅读时长（分钟）</h2>
-  <div class="chart-card"><canvas id="dailyChart" height="90"></canvas></div>
-</div>
-
-<div class="section">
-  <h2>趋势分析</h2>
+  <h2>总体偏好</h2>
   <div class="chart-grid">
-    <div class="chart-card"><h2>每月阅读时长（小时）</h2><canvas id="monthlyChart" height="160"></canvas></div>
     <div class="chart-card"><h2>偏好分类（累计阅读秒）</h2><canvas id="categoryChart" height="160"></canvas></div>
     <div class="chart-card"><h2>24 小时阅读分布</h2><canvas id="hourChart" height="160"></canvas></div>
     <div class="chart-card">

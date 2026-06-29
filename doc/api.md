@@ -78,9 +78,10 @@ python cli.py probe /readdata/detail -p mode=overall   # 调试单个接口
 `readRate`、`wrReadTime`、`wrListenTime`、`rank`、`registTime`、`medals`、`preferBooks`、
 `recordReadingTime`、`readRecordsWord`、`readDistributionWord`。
 
-> 本项目用法：每次同步按 `overall` → `monthly` → `weekly` 顺序各存一份统计快照；其中 `monthly` 与 `weekly`
-> 的 `readTimes` 都会写入每日时长序列（驱动每日趋势图）。历史回填另循环调用 `monthly` + 历史 `baseTime` 逐月补齐
-> （见 `fetcher.backfill_history`，默认回填 13 个月）。
+> 本项目用法：每次同步刷新「当前 + 上一」周/月/年与 `overall`（累计），按 `(mode, baseTime)` 归一化存入
+> `period_stat` 表。**首次同步**额外用历史 `baseTime` 逐周期回填 周/月/年 的全部历史（注册至今，由 `registTime`
+> 定起点），之后只增量刷新当前周期。「概览」页按 `mode + offset` 直接读库渲染，浏览时不再联网（见
+> `app.stats` / `app.fetcher._pull_stats`）。
 
 ---
 

@@ -1,4 +1,4 @@
-from app.utils import fmt_duration, month_label, ts_to_date
+from app.utils import fmt_duration, ts_to_date
 
 
 def test_fmt_duration():
@@ -13,7 +13,3 @@ def test_fmt_duration():
 def test_ts_to_date_china_tz():
     # 1780243200 is 2026-06-01 00:00 in UTC+8.
     assert ts_to_date(1780243200) == "2026-06-01"
-
-
-def test_month_label():
-    assert month_label("2026-06-12") == "2026-06"

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 
@@ -50,12 +50,3 @@ def fmt_duration(seconds: int | None) -> str:
     if hours:
         return f"{hours}小时{minutes}分" if minutes else f"{hours}小时"
     return f"{minutes}分钟"
-
-
-def month_label(d: str) -> str:
-    """'2026-06-12' -> '2026-06'."""
-    return d[:7]
-
-
-def parse_date(d: str) -> date:
-    return datetime.strptime(d, "%Y-%m-%d").date()

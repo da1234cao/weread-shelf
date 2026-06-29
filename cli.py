@@ -2,7 +2,6 @@
 
 Usage:
     python cli.py pull              # one-off pull of all data into SQLite
-    python cli.py backfill -m 13    # seed daily history for the last N months
     python cli.py probe <api_name>  # raw gateway call, pretty-printed (debugging)
     python cli.py serve             # run the web server + scheduler
 """
@@ -24,14 +23,6 @@ def cmd_pull(args: argparse.Namespace) -> int:
 
     counts = run_daily_pull(kind="manual")
     print(json.dumps(counts, ensure_ascii=False, indent=2))
-    return 0
-
-
-def cmd_backfill(args: argparse.Namespace) -> int:
-    from app.fetcher import backfill_history
-
-    result = backfill_history(months=args.months)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -65,10 +56,6 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("pull", help="one-off pull of all data").set_defaults(func=cmd_pull)
-
-    bf = sub.add_parser("backfill", help="seed daily reading-time history")
-    bf.add_argument("-m", "--months", type=int, default=13)
-    bf.set_defaults(func=cmd_backfill)
 
     pr = sub.add_parser("probe", help="raw gateway call (debugging)")
     pr.add_argument("api_name")

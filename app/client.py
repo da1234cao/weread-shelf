@@ -146,7 +146,10 @@ class WeReadClient:
 
     # -- internals ---------------------------------------------------------
     def _throttle(self) -> None:
-        wait = self.settings.request_interval - (time.monotonic() - self._last_call_ts)
+        # Spacing between gateway calls is user-tunable from the admin page so the
+        # operator can find a rate that doesn't trip the gateway's limits.
+        interval = settings_store.get().gateway_interval
+        wait = interval - (time.monotonic() - self._last_call_ts)
         if wait > 0:
             time.sleep(wait)
         self._last_call_ts = time.monotonic()

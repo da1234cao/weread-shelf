@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import time
 from datetime import datetime
 
 import pytest
@@ -15,12 +16,11 @@ from app.fetcher import run_daily_pull
 from app.models import (
     Book,
     Bookmark,
-    DailyReadTime,
+    PeriodStat,
     PullRun,
     Recommendation,
     Review,
     ShelfItem,
-    StatSnapshot,
 )
 
 from . import fixtures as fx
@@ -31,10 +31,16 @@ class FakeClient:
 
     def __init__(self):
         self.calls = []
+        # Registration ~5 weeks ago keeps the first-pull history backfill small.
+        self.reg_time = int(time.time()) - 5 * 7 * 86400
 
     def read_data_detail(self, mode=None, base_time=None):
-        self.calls.append(("readdata", mode))
-        return {"overall": fx.OVERALL, "monthly": fx.MONTHLY, "weekly": fx.WEEKLY}[mode]
+        self.calls.append((mode, base_time))
+        if mode == "overall":
+            data = dict(fx.OVERALL)
+            data["registTime"] = self.reg_time
+            return data
+        return {"weekly": fx.WEEKLY, "monthly": fx.MONTHLY, "annually": fx.ANNUALLY}[mode]
 
     def shelf_sync(self):
         return fx.SHELF
@@ -78,23 +84,21 @@ def test_run_daily_pull_persists_everything():
     assert counts["bookmarks"] == 2
     assert counts["reviews"] == 1
     assert counts["recs"] == 1
-    assert counts["days"] >= 3  # monthly(3 non-zero) + weekly(1)
+    assert counts["stats"] > 4  # overall + current/prev week/month/year + history backfill
     assert counts["books_info"] == 4  # b1, b2, b3, r1 each enriched once
     assert counts["chapters"] == 4  # b1, b2, b3, r1 each get a TOC fetch
     assert counts["pruned"] == 0  # retention_days defaults to 0 (off)
 
     with session_scope() as s:
-        # Daily series: zero-second day is dropped.
-        trend = repo.daily_trend(s)
-        days = {d["date"]: d["seconds"] for d in trend}
-        assert days["2026-06-01"] == 3600
-        assert "2026-06-03" not in days  # 0 seconds skipped
-
-        ov = repo.overview(s)
-        assert ov["read_days"] == 845
-        assert ov["total_read_time"] == 5844393
-        assert ov["book_count"] >= 3
-        assert any(st["stat"] == "读过" for st in ov["read_stat"])
+        # The cumulative overall row is stored and display-normalized.
+        overall = repo.get_period_stat(s, "overall", 0)
+        assert overall["total_read_time"] == 5844393
+        assert any(st["stat"] == "读过" for st in overall["read_stat"])
+        # overall distribution drops the leading zero years (2018/2019), keeps 2020.
+        assert overall["distribution"] == [{"label": "2020", "seconds": 677539}]
+        # The first pull backfilled history and set the flag.
+        from app import settings_store
+        assert settings_store.get().stats_backfilled is True
 
         shelf = repo.current_shelf(s)
         names = {g["name"] for g in shelf["groups"]}
@@ -161,14 +165,19 @@ def test_failed_pull_is_recorded_not_rolled_back():
         assert repo.last_pull(s) is None  # no successful pull on record
 
 
-def test_monthly_trend_aggregates_by_month():
+def test_second_pull_skips_history_backfill():
+    """Once stats_backfilled is set, a later pull only refreshes the volatile
+    periods (overall + current/previous), not the whole history again."""
     run_daily_pull(client=FakeClient())
     with session_scope() as s:
-        monthly = repo.monthly_trend(s)
-    by_month = {m["month"]: m["seconds"] for m in monthly}
-    # Both monthly (3600+1800+7200) and the weekly fixture day (2432) fall in
-    # 2026-06 and are merged into the per-day series: 12600 + 2432 = 15032.
-    assert by_month["2026-06"] == 15032
+        first = len(s.exec(select(PeriodStat)).all())
+
+    c = FakeClient()
+    run_daily_pull(client=c)
+    with session_scope() as s:
+        assert len(s.exec(select(PeriodStat)).all()) == first  # no new history rows
+    # overall + (weekly/monthly/annually × current+previous) = 7 refreshes, no backfill.
+    assert len(c.calls) == 7
 
 
 def test_bookmark_removed_is_deleted():
@@ -254,19 +263,17 @@ def test_book_review_split_from_thoughts():
 
 
 def _seed_snapshots(s, dates):
-    """Add one shelf/recommendation/stat(overall+weekly) snapshot per pull_date."""
+    """Add one shelf + recommendation snapshot per pull_date."""
     for d in dates:
         s.add(ShelfItem(pull_date=d, book_id="b1"))
         s.add(Recommendation(pull_date=d, book_id="r1", title="t"))
-        for mode in ("overall", "weekly"):
-            s.add(StatSnapshot(pull_date=d, mode=mode))
 
 
 def test_prune_snapshots_deletes_old_keeps_latest_and_exempt():
     with session_scope() as s:
         _seed_snapshots(s, ("2026-01-01", "2026-03-01", "2026-06-01"))
         # Exempt data that must never be pruned.
-        s.add(DailyReadTime(date="2026-01-01", seconds=100))
+        s.add(PeriodStat(mode="overall", base_time=0, payload_json="{}"))
         s.add(Bookmark(bookmark_id="bm1", book_id="b1", create_time=0))
         s.add(Review(review_id="rv1", book_id="b1", create_time=0))
         # pull_run log: an old run plus a recent one (finish_pull always sets
@@ -284,12 +291,10 @@ def test_prune_snapshots_deletes_old_keeps_latest_and_exempt():
         # Snapshots before the cutoff are gone; the newest pull_date survives.
         assert {x.pull_date for x in s.exec(select(ShelfItem)).all()} == {"2026-06-01"}
         assert {x.pull_date for x in s.exec(select(Recommendation)).all()} == {"2026-06-01"}
-        assert {x.pull_date for x in s.exec(select(StatSnapshot)).all()} == {"2026-06-01"}
-        assert len(s.exec(select(StatSnapshot)).all()) == 2  # both modes kept
         # pull_run: old one pruned, recent kept.
         assert {r.id for r in s.exec(select(PullRun)).all()} == {2}
         # Exempt tables untouched.
-        assert s.get(DailyReadTime, "2026-01-01") is not None
+        assert s.get(PeriodStat, ("overall", 0)) is not None
         assert s.get(Bookmark, "bm1") is not None
         assert s.get(Review, "rv1") is not None
 
@@ -304,4 +309,3 @@ def test_prune_snapshots_keeps_latest_even_when_all_stale():
         s.commit()
         assert {x.pull_date for x in s.exec(select(ShelfItem)).all()} == {"2026-02-01"}
         assert {x.pull_date for x in s.exec(select(Recommendation)).all()} == {"2026-02-01"}
-        assert {x.pull_date for x in s.exec(select(StatSnapshot)).all()} == {"2026-02-01"}

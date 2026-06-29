@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlmodel import Session, delete, select
@@ -18,71 +18,34 @@ from .models import (
     Book,
     Bookmark,
     Chapter,
-    DailyReadTime,
+    PeriodStat,
     PullRun,
     Recommendation,
     Review,
     ShelfItem,
-    StatSnapshot,
 )
-from .utils import fmt_duration, month_label, parse_date, ts_to_date
 
 # --------------------------------------------------------------------------
 # Write side (used by the fetcher)
 # --------------------------------------------------------------------------
 
 
-def upsert_daily_read_times(session: Session, read_times: dict[str, Any]) -> int:
-    """Store per-day reading seconds from a /readdata/detail readTimes map."""
-    count = 0
-    for ts, secs in (read_times or {}).items():
-        secs = int(secs or 0)
-        if secs <= 0:
-            continue
-        day = ts_to_date(int(ts))
-        row = session.get(DailyReadTime, day)
-        if row is None:
-            session.add(DailyReadTime(date=day, seconds=secs))
-        else:
-            row.seconds = secs
-            row.updated_at = datetime.now(timezone.utc)
-            session.add(row)
-        count += 1
-    return count
-
-
-def save_stat_snapshot(session: Session, pull_date: str, mode: str, data: dict[str, Any]) -> None:
-    """Upsert one (pull_date, mode) statistics snapshot."""
-    existing = session.exec(
-        select(StatSnapshot).where(
-            StatSnapshot.pull_date == pull_date, StatSnapshot.mode == mode
-        )
-    ).first()
-    row = existing or StatSnapshot(pull_date=pull_date, mode=mode)
-    row.total_read_time = int(data.get("totalReadTime", 0) or 0)
-    row.read_days = int(data.get("readDays", 0) or 0)
-    row.day_average = int(data.get("dayAverageReadTime", 0) or 0)
-    row.read_rate = int(data.get("readRate", 0) or 0)
-    row.wr_read_time = int(data.get("wrReadTime", 0) or 0)
-    row.wr_listen_time = int(data.get("wrListenTime", 0) or 0)
-    # Keep only the display-relevant breakdowns to avoid bloating the row.
-    keep = {
-        k: data.get(k)
-        for k in (
-            "preferCategory",
-            "preferAuthor",
-            "preferTime",
-            "preferCategoryWord",
-            "preferTimeWord",
-            "readStat",
-            "compare",
-            "registTime",
-        )
-        if data.get(k) is not None
-    }
-    row.payload_json = json.dumps(keep, ensure_ascii=False)
+def upsert_period_stat(session: Session, mode: str, base_time: int, payload: dict[str, Any]) -> None:
+    """Store one normalized (mode, base_time) stats row, overwriting if present."""
+    row = session.get(PeriodStat, (mode, base_time)) or PeriodStat(mode=mode, base_time=base_time)
+    row.payload_json = json.dumps(payload, ensure_ascii=False)
     row.captured_at = datetime.now(timezone.utc)
     session.add(row)
+
+
+def get_period_stat(session: Session, mode: str, base_time: int) -> dict[str, Any] | None:
+    """The stored display payload for a period, or None if not fetched yet."""
+    row = session.get(PeriodStat, (mode, base_time))
+    return json.loads(row.payload_json) if row else None
+
+
+def has_period_stat(session: Session, mode: str, base_time: int) -> bool:
+    return session.get(PeriodStat, (mode, base_time)) is not None
 
 
 def upsert_book(session: Session, book_id: str, **fields: Any) -> None:
@@ -266,8 +229,8 @@ def finish_pull(session: Session, run: PullRun, ok: bool, counts: dict[str, int]
 def prune_snapshots(session: Session, cutoff_date: str, cutoff_dt: datetime) -> int:
     """Delete append-only snapshot rows older than the cutoff, returning how many.
 
-    Only the unbounded-growth tables are touched — dated shelf/stat/recommendation
-    snapshots and the pull-run log. The reading-time series, highlights, reviews and
+    Only the unbounded-growth tables are touched — dated shelf/recommendation
+    snapshots and the pull-run log. Per-period stats, highlights, reviews and
     book/chapter metadata are never pruned. Each series' most recent entry is always
     kept (even if older than the cutoff), so the dashboard never reads an empty set.
     """
@@ -279,22 +242,6 @@ def prune_snapshots(session: Session, cutoff_date: str, cutoff_dt: datetime) -> 
         if latest:
             removed += session.exec(
                 delete(model).where(model.pull_date < cutoff_date, model.pull_date < latest)
-            ).rowcount
-
-    # stat_snapshot is per (pull_date, mode); keep the newest pull_date of each mode.
-    for mode in session.exec(select(StatSnapshot.mode).distinct()).all():
-        latest = session.exec(
-            select(StatSnapshot.pull_date)
-            .where(StatSnapshot.mode == mode)
-            .order_by(StatSnapshot.pull_date.desc())
-        ).first()
-        if latest:
-            removed += session.exec(
-                delete(StatSnapshot).where(
-                    StatSnapshot.mode == mode,
-                    StatSnapshot.pull_date < cutoff_date,
-                    StatSnapshot.pull_date < latest,
-                )
             ).rowcount
 
     # pull_run is an event log keyed by started_at; keep the latest run and the
@@ -311,76 +258,6 @@ def prune_snapshots(session: Session, cutoff_date: str, cutoff_dt: datetime) -> 
 # --------------------------------------------------------------------------
 # Read side (used by the web layer)
 # --------------------------------------------------------------------------
-
-
-def daily_trend(session: Session, days: int = 120) -> list[dict[str, Any]]:
-    # Most recent `days` days, returned oldest-first for charting.
-    rows = session.exec(
-        select(DailyReadTime).order_by(DailyReadTime.date.desc()).limit(days)
-    ).all()
-    return [
-        {"date": r.date, "seconds": r.seconds, "minutes": round(r.seconds / 60, 1)}
-        for r in reversed(rows)
-    ]
-
-
-def monthly_trend(session: Session) -> list[dict[str, Any]]:
-    rows = session.exec(select(DailyReadTime)).all()
-    buckets: dict[str, int] = defaultdict(int)
-    for r in rows:
-        buckets[month_label(r.date)] += r.seconds
-    return [
-        {"month": m, "seconds": s, "hours": round(s / 3600, 1)}
-        for m, s in sorted(buckets.items())
-    ]
-
-
-def latest_snapshot(session: Session, mode: str) -> StatSnapshot | None:
-    return session.exec(
-        select(StatSnapshot)
-        .where(StatSnapshot.mode == mode)
-        .order_by(StatSnapshot.pull_date.desc())
-    ).first()
-
-
-def _current_streak(rows: list[DailyReadTime]) -> int:
-    """Consecutive days (ending at the most recent active day) with reading."""
-    active = {r.date for r in rows if r.seconds > 0}
-    if not active:
-        return 0
-    cur = max(parse_date(d) for d in active)
-    streak = 0
-    while cur.strftime("%Y-%m-%d") in active:
-        streak += 1
-        cur = cur - timedelta(days=1)
-    return streak
-
-
-def overview(session: Session) -> dict[str, Any]:
-    overall = latest_snapshot(session, "overall")
-    monthly = latest_snapshot(session, "monthly")
-    rows = session.exec(select(DailyReadTime)).all()
-    total_books = session.exec(select(Book)).all()
-    last = last_pull(session)
-
-    read_stat = []
-    if overall:
-        payload = json.loads(overall.payload_json)
-        read_stat = payload.get("readStat", [])
-
-    return {
-        "total_read_time": overall.total_read_time if overall else 0,
-        "total_read_time_h": fmt_duration(overall.total_read_time if overall else 0),
-        "read_days": overall.read_days if overall else 0,
-        "read_rate": overall.read_rate if overall else 0,
-        "month_read_time": monthly.total_read_time if monthly else 0,
-        "month_read_time_h": fmt_duration(monthly.total_read_time if monthly else 0),
-        "month_read_days": monthly.read_days if monthly else 0,
-        "streak": _current_streak(rows),
-        "book_count": len(total_books),
-        "read_stat": read_stat,
-        "last_pull": last,
-    }
 
 
 def current_shelf(session: Session) -> dict[str, Any]:

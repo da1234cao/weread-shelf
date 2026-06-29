@@ -13,6 +13,7 @@ from typing import Any
 
 from . import repository as repo
 from . import settings_store
+from . import stats
 from .client import WeReadClient
 from .db import init_db, session_scope
 from .models import PullRun
@@ -74,7 +75,7 @@ def run_daily_pull(client: WeReadClient | None = None, kind: str = "daily") -> d
     owns = client is None
     client = client or WeReadClient()
     counts: dict[str, int] = {
-        "days": 0, "shelf": 0, "books": 0, "books_info": 0, "chapters": 0,
+        "stats": 0, "shelf": 0, "books": 0, "books_info": 0, "chapters": 0,
         "bookmarks": 0, "reviews": 0, "recs": 0, "pruned": 0, "errors": 0,
     }
     pull_date = today_str()
@@ -83,6 +84,7 @@ def run_daily_pull(client: WeReadClient | None = None, kind: str = "daily") -> d
 
     error = ""
     try:
+        _pull_stats(client, counts)        # reading stats -> period_stat (first pull backfills history)
         _run_main_pull(client, pull_date, counts)
         # Each phase below runs in its own short transaction so per-book network
         # calls never hold the main write lock. (The book page used to fetch this
@@ -106,17 +108,70 @@ def run_daily_pull(client: WeReadClient | None = None, kind: str = "daily") -> d
     return counts
 
 
-def _run_main_pull(client: WeReadClient, pull_date: str, counts: dict[str, int]) -> None:
-    """The bulk pull (stats, shelf, notebooks, notes, recommendations) in one txn."""
-    with session_scope() as session:
-        # 1) Reading statistics (overall + current month + current week).
-        for mode in ("overall", "monthly", "weekly"):
-            data = client.read_data_detail(mode=mode)
-            repo.save_stat_snapshot(session, pull_date, mode, data)
-            if mode in ("monthly", "weekly"):
-                counts["days"] += repo.upsert_daily_read_times(session, data.get("readTimes", {}))
+def _pull_stats(client: WeReadClient, counts: dict[str, int]) -> None:
+    """Fetch reading statistics into ``period_stat``.
 
-        # 2) Shelf. The shelf is the only source of the per-user "read-finished"
+    Every pull refreshes the *volatile* periods — ``overall`` (cumulative) plus the
+    current and previous week/month/year (the previous one is re-fetched once after
+    it closes, to capture its final numbers). The first pull additionally backfills
+    every immutable past period (skipping any already stored), then flips
+    ``stats_backfilled`` so later pulls stay light. Each period is its own short
+    transaction; one period failing is logged and counted, not fatal.
+    """
+    overall = _fetch_period(client, "overall", 0, counts)
+    for mode in ("weekly", "monthly", "annually"):
+        for offset in (0, -1):
+            _fetch_period(client, mode, stats.base_time_for(mode, offset), counts)
+
+    if settings_store.get().stats_backfilled or overall is None:
+        return
+
+    reg_time = int(overall.get("registTime") or 0) or _earliest_read_ts(overall)
+    complete = True
+    for mode in ("weekly", "monthly", "annually"):
+        targets = stats.historical_base_times(mode, reg_time)
+        for base_time in targets:
+            with session_scope() as session:
+                if repo.has_period_stat(session, mode, base_time):
+                    continue
+            if _fetch_period(client, mode, base_time, counts) is None:
+                complete = False
+        logger.info("stats backfill: %s, %d periods", mode, len(targets))
+    if complete:
+        settings_store.save(stats_backfilled=True)
+
+
+def _fetch_period(
+    client: WeReadClient, mode: str, base_time: int, counts: dict[str, int]
+) -> dict[str, Any] | None:
+    """Fetch one (mode, base_time) period and store its normalized payload.
+
+    Tolerant: a failure is logged + counted and returns None, so a flaky single
+    period can't abort the whole pull. Returns the raw response on success.
+    """
+    try:
+        base_arg = None if mode == "overall" else base_time
+        data = client.read_data_detail(mode=mode, base_time=base_arg)
+    except Exception as exc:
+        logger.warning("stats fetch failed for %s@%s: %s", mode, base_time, exc)
+        counts["errors"] += 1
+        return None
+    with session_scope() as session:
+        repo.upsert_period_stat(session, mode, base_time, stats.normalize(mode, base_time, data))
+    counts["stats"] += 1
+    return data
+
+
+def _earliest_read_ts(overall: dict[str, Any]) -> int:
+    """Fallback registration bound: earliest bucket in overall's readTimes, else now."""
+    times = [int(t) for t in (overall.get("readTimes") or {})]
+    return min(times) if times else int(datetime.now(tzinfo()).timestamp())
+
+
+def _run_main_pull(client: WeReadClient, pull_date: str, counts: dict[str, int]) -> None:
+    """The bulk pull (shelf, notebooks, notes, recommendations) in one txn."""
+    with session_scope() as session:
+        # 1) Shelf. The shelf is the only source of the per-user "read-finished"
         # flag (finishReading); we record it per book to reuse in the notebook loop.
         shelf = client.shelf_sync()
         archive = _shelf_archive_map(shelf)
@@ -142,7 +197,7 @@ def _run_main_pull(client: WeReadClient, pull_date: str, counts: dict[str, int])
             })
         counts["shelf"] = repo.save_shelf(session, pull_date, shelf_items)
 
-        # 3) Notebooks (paginated) -> per-book counts + metadata.
+        # 2) Notebooks (paginated) -> per-book counts + metadata.
         notebook_books = _fetch_all_notebooks(client)
         counts["books"] = len(notebook_books)
         for nb in notebook_books:
@@ -168,13 +223,13 @@ def _run_main_pull(client: WeReadClient, pull_date: str, counts: dict[str, int])
                 note_count=int(nb.get("noteCount", 0) or 0),
                 review_count=int(nb.get("reviewCount", 0) or 0),
             )
-            # 4) Highlights (划线) and thoughts (想法) per book.
+            # 3) Highlights (划线) and thoughts (想法) per book.
             if int(nb.get("noteCount", 0) or 0) > 0:
                 counts["bookmarks"] += _pull_bookmarks(client, session, bid, counts)
             if int(nb.get("reviewCount", 0) or 0) > 0:
                 counts["reviews"] += _pull_reviews(client, session, bid, counts)
 
-        # 5) Recommendations (non-essential — a failure here must not fail the pull).
+        # 4) Recommendations (non-essential — a failure here must not fail the pull).
         try:
             rec = client.recommend(count=12)
             rec_books = rec.get("books", []) or []
@@ -320,34 +375,3 @@ def _pull_reviews(client: WeReadClient, session, book_id: str, counts: dict[str,
     # Each item nests the actual review under "review".
     reviews = [item.get("review", item) for item in data.get("reviews", []) or []]
     return repo.upsert_reviews(session, reviews)
-
-
-def backfill_history(months: int = 13, client: WeReadClient | None = None) -> dict[str, int]:
-    """Seed the daily time series with the last `months` months of per-day data.
-
-    Calls /readdata/detail mode=monthly with a baseTime inside each past month;
-    the server normalizes baseTime to the period start.
-    """
-    init_db()
-    owns = client is None
-    client = client or WeReadClient()
-    total_days = 0
-    now = datetime.now(tzinfo())
-    try:
-        with session_scope() as session:
-            run = repo.start_pull(session, "backfill")
-            year, month = now.year, now.month
-            for _ in range(months):
-                base = datetime(year, month, 1, 12, 0, 0, tzinfo=tzinfo())
-                data = client.read_data_detail(mode="monthly", base_time=int(base.timestamp()))
-                added = repo.upsert_daily_read_times(session, data.get("readTimes", {}))
-                total_days += added
-                logger.info("backfilled %s-%02d: %d days", year, month, added)
-                month -= 1
-                if month == 0:
-                    month, year = 12, year - 1
-            repo.finish_pull(session, run, ok=True, counts={"days": total_days})
-    finally:
-        if owns:
-            client.close()
-    return {"days": total_days}

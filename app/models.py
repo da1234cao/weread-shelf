@@ -15,38 +15,20 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class DailyReadTime(SQLModel, table=True):
-    """Per-day reading seconds, the headline time series.
+class PeriodStat(SQLModel, table=True):
+    """Per-period reading stats from /readdata/detail, normalized for display.
 
-    Sourced from /readdata/detail `readTimes` maps (monthly mode gives per-day
-    values for a month; historical months are backfilled via baseTime).
+    One row per (mode, base_time), where base_time is the period's normalized
+    start (overall uses 0). Past periods are immutable and fetched once on the
+    first pull; the current/previous period and `overall` refresh every pull.
+    The payload is already display-ready (see app.stats.normalize), so the web
+    layer just reads it — no live gateway call when browsing.
     """
 
-    __tablename__ = "daily_read_time"
+    __tablename__ = "period_stat"
 
-    date: str = Field(primary_key=True, description="YYYY-MM-DD (local day)")
-    seconds: int = 0
-    updated_at: datetime = Field(default_factory=_utcnow)
-
-
-class StatSnapshot(SQLModel, table=True):
-    """A dated snapshot of /readdata/detail for a given mode.
-
-    The rich preference breakdowns (category/author/hour/etc.) are kept verbatim
-    as JSON so the dashboard can render them without a dedicated column each.
-    """
-
-    __tablename__ = "stat_snapshot"
-
-    id: int | None = Field(default=None, primary_key=True)
-    pull_date: str = Field(index=True, description="YYYY-MM-DD of the pull")
-    mode: str = Field(index=True, description="weekly|monthly|annually|overall")
-    total_read_time: int = 0
-    read_days: int = 0
-    day_average: int = 0
-    read_rate: int = 0
-    wr_read_time: int = 0
-    wr_listen_time: int = 0
+    mode: str = Field(primary_key=True, description="weekly|monthly|annually|overall")
+    base_time: int = Field(primary_key=True, description="period start ts; 0 for overall")
     payload_json: str = "{}"
     captured_at: datetime = Field(default_factory=_utcnow)
 
@@ -186,6 +168,10 @@ class AppSettings(SQLModel, table=True):
     # are pruned from the append-only snapshot tables; each series' latest is always
     # kept. See repository.prune_snapshots.
     retention_days: int = 0
+    # Seconds between successive gateway calls in a pull (politeness / rate limit).
+    gateway_interval: float = 0.2
+    # Flips True once the first full historical stats backfill has completed.
+    stats_backfilled: bool = False
     timezone: str = "Asia/Shanghai"
     # Random secret for signing session cookies (generated on first run).
     session_secret: str = ""
