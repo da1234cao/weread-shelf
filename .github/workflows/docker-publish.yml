@@ -1,0 +1,54 @@
+# Build the Docker image and push it to the GitHub Container Registry (ghcr.io).
+#
+# Runs only when a Git tag is pushed, e.g.:
+#     git tag v0.1.0
+#     git push origin v0.1.0
+#
+# Authentication uses the built-in GITHUB_TOKEN, so no secrets need to be
+# configured. The image is pushed under two tags: the Git tag itself and
+# `latest`.
+#
+# Note: ghcr.io packages are private by default. After the first push, open
+# the package page on GitHub → Package settings → Change visibility → Public
+# to allow anonymous `docker pull`.
+name: Build and publish Docker image
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
