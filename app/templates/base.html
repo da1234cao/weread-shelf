@@ -23,6 +23,11 @@
   <main>
     {% block content %}{% endblock %}
   </main>
+  {% if show_footer_credit %}
+  <footer class="site-footer">
+    本站基于「<a href="https://github.com/da1234cao/weread-shelf" target="_blank" rel="noopener">weread-shelf</a>」构建
+  </footer>
+  {% endif %}
   <div class="toast" id="toast"></div>
   <script>
     function toast(msg) {

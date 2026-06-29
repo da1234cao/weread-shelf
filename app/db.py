@@ -74,6 +74,8 @@ def _migrate(engine) -> None:
             conn.exec_driver_sql("ALTER TABLE app_settings ADD COLUMN gateway_interval FLOAT NOT NULL DEFAULT 0.2")
         if settings_cols and "stats_backfilled" not in settings_cols:
             conn.exec_driver_sql("ALTER TABLE app_settings ADD COLUMN stats_backfilled BOOLEAN NOT NULL DEFAULT 0")
+        if settings_cols and "show_footer_credit" not in settings_cols:
+            conn.exec_driver_sql("ALTER TABLE app_settings ADD COLUMN show_footer_credit BOOLEAN NOT NULL DEFAULT 1")
 
 
 @contextmanager

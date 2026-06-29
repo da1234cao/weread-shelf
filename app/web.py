@@ -120,6 +120,7 @@ def _render(request: Request, name: str, **ctx):
     s = settings_store.get()
     base = {
         "nav": {"show_overview": s.show_overview, "show_discover": s.show_discover},
+        "show_footer_credit": s.show_footer_credit,
         "cur_user": _current(request),
     }
     return templates.TemplateResponse(request, name, {**base, **ctx})
@@ -243,6 +244,7 @@ def admin_settings(
     request: Request,
     show_overview: bool = Form(False),
     show_discover: bool = Form(False),
+    show_footer_credit: bool = Form(False),
     require_user_auth: bool = Form(False),
     pull_interval_hours: int = Form(24),
     retention_days: int = Form(0),
@@ -262,6 +264,7 @@ def admin_settings(
     gateway_interval = min(max(gateway_interval, 0.05), 5.0)
     settings_store.save(
         show_overview=show_overview, show_discover=show_discover,
+        show_footer_credit=show_footer_credit,
         require_user_auth=require_user_auth, pull_interval_hours=pull_interval_hours,
         retention_days=retention_days, gateway_interval=gateway_interval,
         timezone=timezone, skill_version=(skill_version or "").strip() or "1.0.3",

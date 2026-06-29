@@ -40,6 +40,11 @@ nav.tabs + .navlink, .navlink { color: var(--muted); font-weight: 500; padding: 
 .navlink:hover { background: var(--accent-soft); color: var(--accent); text-decoration: none; }
 
 main { max-width: 1100px; margin: 0 auto; padding: 24px 20px 60px; }
+.site-footer {
+  max-width: 1100px; margin: 0 auto; padding: 20px;
+  text-align: center; color: var(--muted); font-size: 13px;
+  border-top: 1px solid var(--border);
+}
 h1 { font-size: 22px; margin: 0 0 4px; }
 .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
 

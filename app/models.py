@@ -162,6 +162,8 @@ class AppSettings(SQLModel, table=True):
     suggested_skill_version: str = ""
     show_overview: bool = True
     show_discover: bool = True
+    # Show the "built on weread-shelf" credit line in the page footer.
+    show_footer_credit: bool = True
     require_user_auth: bool = False
     pull_interval_hours: int = 24
     # Snapshot retention window in days (0 = keep forever). Pulls older than this
