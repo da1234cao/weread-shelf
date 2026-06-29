@@ -54,6 +54,9 @@ def _migrate(engine) -> None:
         for col in ("rating", "rating_count", "bookmark_count"):
             if col in book_cols:
                 conn.exec_driver_sql(f"ALTER TABLE book DROP COLUMN {col}")
+        settings_cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(app_settings)")}
+        if settings_cols and "retention_days" not in settings_cols:
+            conn.exec_driver_sql("ALTER TABLE app_settings ADD COLUMN retention_days INTEGER NOT NULL DEFAULT 0")
 
 
 @contextmanager

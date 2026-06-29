@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import repository as repo
@@ -68,7 +68,7 @@ def run_daily_pull(client: WeReadClient | None = None, kind: str = "daily") -> d
     client = client or WeReadClient()
     counts: dict[str, int] = {
         "days": 0, "shelf": 0, "books": 0, "books_info": 0, "chapters": 0,
-        "bookmarks": 0, "reviews": 0, "recs": 0, "errors": 0,
+        "bookmarks": 0, "reviews": 0, "recs": 0, "pruned": 0, "errors": 0,
     }
     pull_date = today_str()
 
@@ -81,6 +81,8 @@ def run_daily_pull(client: WeReadClient | None = None, kind: str = "daily") -> d
         _enrich_book_info(client, counts)
         # Same write-once treatment for each book's table of contents.
         _enrich_chapters(client, counts)
+        # Trim old snapshots per the retention setting (its own short transaction).
+        _prune_old_data(counts)
     finally:
         if owns:
             client.close()
@@ -238,6 +240,23 @@ def _enrich_chapters(client: WeReadClient, counts: dict[str, int]) -> None:
             repo.replace_chapters(session, bid, info.get("chapters", []))
             repo.upsert_book(session, bid, chapters_update_time=stamp)
         counts["chapters"] += 1
+
+
+def _prune_old_data(counts: dict[str, int]) -> None:
+    """Delete snapshot rows older than the configured retention window (0 = off).
+
+    Compares against a local-tz cutoff date for the dated tables and a UTC cutoff
+    for pull_run's timestamp. Notes and the reading-time series are never pruned.
+    """
+    days = settings_store.get().retention_days
+    if days <= 0:
+        return
+    cutoff_date = (datetime.now(tzinfo()).date() - timedelta(days=days)).strftime("%Y-%m-%d")
+    cutoff_dt = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+    with session_scope() as session:
+        counts["pruned"] = repo.prune_snapshots(session, cutoff_date, cutoff_dt)
+    if counts["pruned"]:
+        logger.info("pruned %d snapshot rows older than %s", counts["pruned"], cutoff_date)
 
 
 def _record_suggested_version(upgrade_info: Any) -> None:

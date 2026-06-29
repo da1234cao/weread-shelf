@@ -263,6 +263,51 @@ def finish_pull(session: Session, run: PullRun, ok: bool, counts: dict[str, int]
     session.add(run)
 
 
+def prune_snapshots(session: Session, cutoff_date: str, cutoff_dt: datetime) -> int:
+    """Delete append-only snapshot rows older than the cutoff, returning how many.
+
+    Only the unbounded-growth tables are touched — dated shelf/stat/recommendation
+    snapshots and the pull-run log. The reading-time series, highlights, reviews and
+    book/chapter metadata are never pruned. Each series' most recent entry is always
+    kept (even if older than the cutoff), so the dashboard never reads an empty set.
+    """
+    removed = 0
+
+    # One snapshot per pull_date; keep the newest pull_date.
+    for model in (ShelfItem, Recommendation):
+        latest = session.exec(select(model.pull_date).order_by(model.pull_date.desc())).first()
+        if latest:
+            removed += session.exec(
+                delete(model).where(model.pull_date < cutoff_date, model.pull_date < latest)
+            ).rowcount
+
+    # stat_snapshot is per (pull_date, mode); keep the newest pull_date of each mode.
+    for mode in session.exec(select(StatSnapshot.mode).distinct()).all():
+        latest = session.exec(
+            select(StatSnapshot.pull_date)
+            .where(StatSnapshot.mode == mode)
+            .order_by(StatSnapshot.pull_date.desc())
+        ).first()
+        if latest:
+            removed += session.exec(
+                delete(StatSnapshot).where(
+                    StatSnapshot.mode == mode,
+                    StatSnapshot.pull_date < cutoff_date,
+                    StatSnapshot.pull_date < latest,
+                )
+            ).rowcount
+
+    # pull_run is an event log keyed by started_at; keep the latest run and the
+    # latest successful run (both are read by the dashboard / refresh status).
+    keep = {r.id for r in (latest_pull(session), last_pull(session)) if r is not None}
+    if keep:
+        removed += session.exec(
+            delete(PullRun).where(PullRun.started_at < cutoff_dt, PullRun.id.not_in(keep))
+        ).rowcount
+
+    return removed
+
+
 # --------------------------------------------------------------------------
 # Read side (used by the web layer)
 # --------------------------------------------------------------------------

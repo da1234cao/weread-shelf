@@ -182,6 +182,10 @@ class AppSettings(SQLModel, table=True):
     show_discover: bool = True
     require_user_auth: bool = False
     pull_interval_hours: int = 24
+    # Snapshot retention window in days (0 = keep forever). Pulls older than this
+    # are pruned from the append-only snapshot tables; each series' latest is always
+    # kept. See repository.prune_snapshots.
+    retention_days: int = 0
     timezone: str = "Asia/Shanghai"
     # Random secret for signing session cookies (generated on first run).
     session_secret: str = ""

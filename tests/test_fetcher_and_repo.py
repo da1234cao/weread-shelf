@@ -3,11 +3,23 @@
 from __future__ import annotations
 
 import copy
+from datetime import datetime
+
+from sqlmodel import select
 
 from app import repository as repo
 from app.db import session_scope
 from app.fetcher import run_daily_pull
-from app.models import Book, Bookmark, Review
+from app.models import (
+    Book,
+    Bookmark,
+    DailyReadTime,
+    PullRun,
+    Recommendation,
+    Review,
+    ShelfItem,
+    StatSnapshot,
+)
 
 from . import fixtures as fx
 
@@ -67,6 +79,7 @@ def test_run_daily_pull_persists_everything():
     assert counts["days"] >= 3  # monthly(3 non-zero) + weekly(1)
     assert counts["books_info"] == 4  # b1, b2, b3, r1 each enriched once
     assert counts["chapters"] == 4  # b1, b2, b3, r1 each get a TOC fetch
+    assert counts["pruned"] == 0  # retention_days defaults to 0 (off)
 
     with session_scope() as s:
         # Daily series: zero-second day is dropped.
@@ -207,3 +220,57 @@ def test_book_review_split_from_thoughts():
 
         row = next(b for b in repo.books_with_notes(s) if b["book_id"] == "b2")
         assert row["review_count"] == 1 and row["book_review_count"] == 1
+
+
+def _seed_snapshots(s, dates):
+    """Add one shelf/recommendation/stat(overall+weekly) snapshot per pull_date."""
+    for d in dates:
+        s.add(ShelfItem(pull_date=d, book_id="b1"))
+        s.add(Recommendation(pull_date=d, book_id="r1", title="t"))
+        for mode in ("overall", "weekly"):
+            s.add(StatSnapshot(pull_date=d, mode=mode))
+
+
+def test_prune_snapshots_deletes_old_keeps_latest_and_exempt():
+    with session_scope() as s:
+        _seed_snapshots(s, ("2026-01-01", "2026-03-01", "2026-06-01"))
+        # Exempt data that must never be pruned.
+        s.add(DailyReadTime(date="2026-01-01", seconds=100))
+        s.add(Bookmark(bookmark_id="bm1", book_id="b1", create_time=0))
+        s.add(Review(review_id="rv1", book_id="b1", create_time=0))
+        # pull_run log: an old run plus a recent one (finish_pull always sets
+        # finished_at, which last_pull orders by).
+        s.add(PullRun(id=1, kind="daily", ok=True,
+                      started_at=datetime(2026, 1, 1), finished_at=datetime(2026, 1, 1)))
+        s.add(PullRun(id=2, kind="daily", ok=True,
+                      started_at=datetime(2026, 6, 1), finished_at=datetime(2026, 6, 1)))
+        s.commit()
+
+        removed = repo.prune_snapshots(s, "2026-05-01", datetime(2026, 5, 1))
+        s.commit()
+        assert removed > 0
+
+        # Snapshots before the cutoff are gone; the newest pull_date survives.
+        assert {x.pull_date for x in s.exec(select(ShelfItem)).all()} == {"2026-06-01"}
+        assert {x.pull_date for x in s.exec(select(Recommendation)).all()} == {"2026-06-01"}
+        assert {x.pull_date for x in s.exec(select(StatSnapshot)).all()} == {"2026-06-01"}
+        assert len(s.exec(select(StatSnapshot)).all()) == 2  # both modes kept
+        # pull_run: old one pruned, recent kept.
+        assert {r.id for r in s.exec(select(PullRun)).all()} == {2}
+        # Exempt tables untouched.
+        assert s.get(DailyReadTime, "2026-01-01") is not None
+        assert s.get(Bookmark, "bm1") is not None
+        assert s.get(Review, "rv1") is not None
+
+
+def test_prune_snapshots_keeps_latest_even_when_all_stale():
+    """If no recent pull exists, the single newest snapshot is still preserved."""
+    with session_scope() as s:
+        _seed_snapshots(s, ("2026-01-01", "2026-02-01"))
+        s.commit()
+        # Cutoff far in the future: every row is "expired".
+        repo.prune_snapshots(s, "2030-01-01", datetime(2030, 1, 1))
+        s.commit()
+        assert {x.pull_date for x in s.exec(select(ShelfItem)).all()} == {"2026-02-01"}
+        assert {x.pull_date for x in s.exec(select(Recommendation)).all()} == {"2026-02-01"}
+        assert {x.pull_date for x in s.exec(select(StatSnapshot)).all()} == {"2026-02-01"}

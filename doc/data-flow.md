@@ -1,7 +1,8 @@
 # 拉取与存储逻辑(从页面操作角度)
 
 本文从"在页面上做了什么操作 → 背后发生了哪些拉取/存储"的角度,说明 weread-shelf
-的数据流。配套文档:接口契约见 [api.md](api.md),需求见 [requirements.md](requirements.md)。
+的数据流。配套文档:接口契约见 [api.md](api.md),需求见 [requirements.md](requirements.md),
+磁盘占用估算见 [storage-estimate.md](storage-estimate.md)。
 
 ## 心智模型
 

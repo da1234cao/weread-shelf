@@ -43,6 +43,12 @@ COMMON_TIMEZONES = [
     "Australia/Sydney", "Pacific/Auckland",
 ]
 
+# Snapshot retention presets for the admin dropdown: (days, label). 0 = keep forever.
+RETENTION_CHOICES = [
+    (0, "不限制"), (90, "90 天"), (180, "180 天"), (365, "1 年"),
+    (730, "2 年"), (1825, "5 年"), (2920, "8 年"), (3650, "10 年"),
+]
+
 # Paths reachable without authentication even when "require login" is on.
 _PUBLIC_PREFIXES = ("/login", "/logout", "/static", "/api/health", "/favicon.ico")
 
@@ -233,7 +239,7 @@ def admin_home(request: Request):
         request, "admin.html",
         s=s, users=users, last_pull=last, upgrade_available=upgrade,
         must_change=user.must_change, saved=request.query_params.get("saved"),
-        has_key=bool(s.api_key), timezones=timezones,
+        has_key=bool(s.api_key), timezones=timezones, retention_choices=RETENTION_CHOICES,
     )
 
 
@@ -244,6 +250,7 @@ def admin_settings(
     show_discover: bool = Form(False),
     require_user_auth: bool = Form(False),
     pull_interval_hours: int = Form(24),
+    retention_days: int = Form(0),
     timezone: str = Form("Asia/Shanghai"),
     skill_version: str = Form("1.0.3"),
 ):
@@ -254,9 +261,12 @@ def admin_settings(
         timezone = settings_store.get().timezone
     if pull_interval_hours not in (6, 12, 24):
         pull_interval_hours = 24
+    if retention_days not in {days for days, _ in RETENTION_CHOICES}:
+        retention_days = 0
     settings_store.save(
         show_overview=show_overview, show_discover=show_discover,
         require_user_auth=require_user_auth, pull_interval_hours=pull_interval_hours,
+        retention_days=retention_days,
         timezone=timezone, skill_version=(skill_version or "").strip() or "1.0.3",
     )
     reschedule()

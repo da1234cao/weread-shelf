@@ -57,6 +57,11 @@
           {% for h in [6, 12, 24] %}<option value="{{ h }}" {{ 'selected' if s.pull_interval_hours == h }}>每 {{ h }} 小时</option>{% endfor %}
         </select>
       </label>
+      <label>数据保留（仅书架/统计/推荐快照，到期自动删除；阅读时长与笔记不受影响）
+        <select name="retention_days">
+          {% for v, label in retention_choices %}<option value="{{ v }}" {{ 'selected' if s.retention_days == v }}>{{ label }}</option>{% endfor %}
+        </select>
+      </label>
       <label>时区
         <select name="timezone">
           {% for z in timezones %}<option value="{{ z }}" {{ 'selected' if s.timezone == z }}>{{ z }}</option>{% endfor %}
