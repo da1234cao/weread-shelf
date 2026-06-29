@@ -6,6 +6,7 @@ import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from sqlalchemy import event
 from sqlmodel import Session, SQLModel, create_engine
 
 from .config import get_settings
@@ -20,10 +21,22 @@ def get_engine():
         # Ensure the parent directory exists (e.g. ./data or /data).
         parent = os.path.dirname(os.path.abspath(db_path))
         os.makedirs(parent, exist_ok=True)
+        # timeout = SQLite busy-wait: a reader blocks briefly instead of failing
+        # outright when a pull holds the write lock.
         _engine = create_engine(
             f"sqlite:///{db_path}",
-            connect_args={"check_same_thread": False},
+            connect_args={"check_same_thread": False, "timeout": 30},
         )
+
+        # WAL lets the dashboard keep reading while a pull writes — without it a
+        # long pull transaction can surface as "database is locked" 500s.
+        @event.listens_for(_engine, "connect")
+        def _set_sqlite_pragma(dbapi_conn, _record):
+            cur = dbapi_conn.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA synchronous=NORMAL")
+            cur.close()
+
     return _engine
 
 

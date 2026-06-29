@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import json
 from datetime import datetime
 
+import pytest
 from sqlmodel import select
 
 from app import repository as repo
@@ -128,6 +130,35 @@ def test_run_daily_pull_persists_everything():
 
         last = repo.last_pull(s)
         assert last is not None and last.ok
+
+
+def test_pull_run_persists_full_counts():
+    """The stored pull_run counts include the post-main-pull phases (enrichment),
+    not just what the main transaction had tallied when it committed."""
+    run_daily_pull(client=FakeClient())
+    with session_scope() as s:
+        run = repo.latest_pull(s)
+        stored = json.loads(run.counts_json)
+    assert run.ok
+    assert stored["books_info"] == 4  # enriched after the main txn — must be recorded
+    assert stored["chapters"] == 4
+    assert stored["bookmarks"] == 2
+
+
+def test_failed_pull_is_recorded_not_rolled_back():
+    """A pull that errors still leaves a pull_run row marked failed; the run record
+    is committed separately from the rolled-back data transaction."""
+    class Boom(FakeClient):
+        def shelf_sync(self):
+            raise RuntimeError("shelf boom")
+
+    with pytest.raises(RuntimeError):
+        run_daily_pull(client=Boom())
+    with session_scope() as s:
+        run = repo.latest_pull(s)
+        assert run is not None and run.ok is False
+        assert "shelf boom" in run.error
+        assert repo.last_pull(s) is None  # no successful pull on record
 
 
 def test_monthly_trend_aggregates_by_month():

@@ -15,6 +15,7 @@ from . import repository as repo
 from . import settings_store
 from .client import WeReadClient
 from .db import init_db, session_scope
+from .models import PullRun
 from .utils import today_str, tzinfo
 
 logger = logging.getLogger(__name__)
@@ -62,7 +63,13 @@ def _chapter_title_map(chapters: list[dict[str, Any]]) -> dict[int, str]:
 
 
 def run_daily_pull(client: WeReadClient | None = None, kind: str = "daily") -> dict[str, int]:
-    """Pull all data and persist it. Returns a counts summary."""
+    """Pull all data and persist it. Returns a counts summary.
+
+    The pull_run row is opened first and finalized in its own transaction *after*
+    every phase finishes, so its ok flag and counts reflect the whole run —
+    enrichment and pruning included — and a failure is recorded rather than rolled
+    back with the data.
+    """
     init_db()
     owns = client is None
     client = client or WeReadClient()
@@ -71,117 +78,116 @@ def run_daily_pull(client: WeReadClient | None = None, kind: str = "daily") -> d
         "bookmarks": 0, "reviews": 0, "recs": 0, "pruned": 0, "errors": 0,
     }
     pull_date = today_str()
+    with session_scope() as session:
+        run_id = repo.start_pull(session, kind).id
 
+    error = ""
     try:
-        _run_main_pull(client, kind, pull_date, counts)
-        # Enrich book metadata (/book/info) *after* the main transaction commits,
-        # one short transaction per book, so these per-book network calls never
-        # hold the main write lock. (The book page used to fetch this lazily on
-        # click, which intermittently caused "database is locked" 500s.)
-        _enrich_book_info(client, counts)
-        # Same write-once treatment for each book's table of contents.
-        _enrich_chapters(client, counts)
-        # Trim old snapshots per the retention setting (its own short transaction).
-        _prune_old_data(counts)
+        _run_main_pull(client, pull_date, counts)
+        # Each phase below runs in its own short transaction so per-book network
+        # calls never hold the main write lock. (The book page used to fetch this
+        # lazily on click, which intermittently caused "database is locked" 500s.)
+        _enrich_book_info(client, counts)  # /book/info metadata, write-once per book
+        _enrich_chapters(client, counts)   # /book/chapterinfo table of contents
+        _prune_old_data(counts)            # trim old snapshots per retention setting
+    except Exception as exc:
+        error = str(exc)
+        logger.exception("%s pull failed", kind)
+        raise
     finally:
         if owns:
             client.close()
+        with session_scope() as session:
+            repo.finish_pull(session, session.get(PullRun, run_id),
+                             ok=not error, counts=counts, error=error)
+        _record_suggested_version(getattr(client, "upgrade_info", None))
 
-    _record_suggested_version(getattr(client, "upgrade_info", None))
+    logger.info("pull complete: %s", counts)
     return counts
 
 
-def _run_main_pull(client: WeReadClient, kind: str, pull_date: str, counts: dict[str, int]) -> None:
+def _run_main_pull(client: WeReadClient, pull_date: str, counts: dict[str, int]) -> None:
     """The bulk pull (stats, shelf, notebooks, notes, recommendations) in one txn."""
     with session_scope() as session:
-        run = repo.start_pull(session, kind)
+        # 1) Reading statistics (overall + current month + current week).
+        for mode in ("overall", "monthly", "weekly"):
+            data = client.read_data_detail(mode=mode)
+            repo.save_stat_snapshot(session, pull_date, mode, data)
+            if mode in ("monthly", "weekly"):
+                counts["days"] += repo.upsert_daily_read_times(session, data.get("readTimes", {}))
+
+        # 2) Shelf. The shelf is the only source of the per-user "read-finished"
+        # flag (finishReading); we record it per book to reuse in the notebook loop.
+        shelf = client.shelf_sync()
+        archive = _shelf_archive_map(shelf)
+        shelf_items = []
+        finish_map: dict[str, int] = {}
+        for b in shelf.get("books", []) or []:
+            bid = b.get("bookId")
+            if not bid:
+                continue
+            finished = int(b.get("finishReading", 0) or 0)
+            finish_map[bid] = finished
+            repo.upsert_book(
+                session, bid,
+                title=b.get("title"), author=b.get("author"), cover=b.get("cover"),
+                finished=finished,
+            )
+            shelf_items.append({
+                "book_id": bid,
+                "archive_name": archive.get(bid, ""),
+                "finish_reading": finished,
+                "secret": int(b.get("secret", 0) or 0),
+                "update_time": int(b.get("updateTime", 0) or 0),
+            })
+        counts["shelf"] = repo.save_shelf(session, pull_date, shelf_items)
+
+        # 3) Notebooks (paginated) -> per-book counts + metadata.
+        notebook_books = _fetch_all_notebooks(client)
+        counts["books"] = len(notebook_books)
+        for nb in notebook_books:
+            book = nb.get("book", {}) or {}
+            bid = nb.get("bookId") or book.get("bookId")
+            if not bid:
+                continue
+            category = ""
+            cats = book.get("categories")
+            if isinstance(cats, list) and cats:
+                category = cats[0].get("title", "") if isinstance(cats[0], dict) else ""
+            # finished := finishReading from the shelf, NOT the notebook's
+            # book.finished (= 已完结, the *book* is serialized to completion, not
+            # that the user read it). Off-shelf books have no such evidence → 0,
+            # which also clears stale flags written by the old behaviour.
+            repo.upsert_book(
+                session, bid,
+                title=book.get("title"), author=book.get("author"), cover=book.get("cover"),
+                category=category, publisher=book.get("publisher"),
+                publish_time=book.get("publishTime"), intro=book.get("intro"),
+                finished=finish_map.get(bid, 0),
+                reading_progress=int(nb.get("readingProgress", 0) or 0),
+                note_count=int(nb.get("noteCount", 0) or 0),
+                review_count=int(nb.get("reviewCount", 0) or 0),
+            )
+            # 4) Highlights (划线) and thoughts (想法) per book.
+            if int(nb.get("noteCount", 0) or 0) > 0:
+                counts["bookmarks"] += _pull_bookmarks(client, session, bid, counts)
+            if int(nb.get("reviewCount", 0) or 0) > 0:
+                counts["reviews"] += _pull_reviews(client, session, bid, counts)
+
+        # 5) Recommendations (non-essential — a failure here must not fail the pull).
         try:
-            # 1) Reading statistics (overall + current month + current week).
-            for mode in ("overall", "monthly", "weekly"):
-                data = client.read_data_detail(mode=mode)
-                repo.save_stat_snapshot(session, pull_date, mode, data)
-                if mode in ("monthly", "weekly"):
-                    counts["days"] += repo.upsert_daily_read_times(session, data.get("readTimes", {}))
-
-            # 2) Shelf. The shelf is the only source of the per-user "read-finished"
-            # flag (finishReading); we record it per book to reuse in the notebook loop.
-            shelf = client.shelf_sync()
-            archive = _shelf_archive_map(shelf)
-            shelf_items = []
-            finish_map: dict[str, int] = {}
-            for b in shelf.get("books", []) or []:
-                bid = b.get("bookId")
-                if not bid:
-                    continue
-                finished = int(b.get("finishReading", 0) or 0)
-                finish_map[bid] = finished
-                repo.upsert_book(
-                    session, bid,
-                    title=b.get("title"), author=b.get("author"), cover=b.get("cover"),
-                    finished=finished,
-                )
-                shelf_items.append({
-                    "book_id": bid,
-                    "archive_name": archive.get(bid, ""),
-                    "finish_reading": finished,
-                    "secret": int(b.get("secret", 0) or 0),
-                    "update_time": int(b.get("updateTime", 0) or 0),
-                })
-            counts["shelf"] = repo.save_shelf(session, pull_date, shelf_items)
-
-            # 3) Notebooks (paginated) -> per-book counts + metadata.
-            notebook_books = _fetch_all_notebooks(client)
-            counts["books"] = len(notebook_books)
-            for nb in notebook_books:
-                book = nb.get("book", {}) or {}
-                bid = nb.get("bookId") or book.get("bookId")
-                if not bid:
-                    continue
-                category = ""
-                cats = book.get("categories")
-                if isinstance(cats, list) and cats:
-                    category = cats[0].get("title", "") if isinstance(cats[0], dict) else ""
-                # finished := finishReading from the shelf, NOT the notebook's
-                # book.finished (= 已完结, the *book* is serialized to completion, not
-                # that the user read it). Off-shelf books have no such evidence → 0,
-                # which also clears stale flags written by the old behaviour.
-                repo.upsert_book(
-                    session, bid,
-                    title=book.get("title"), author=book.get("author"), cover=book.get("cover"),
-                    category=category, publisher=book.get("publisher"),
-                    publish_time=book.get("publishTime"), intro=book.get("intro"),
-                    finished=finish_map.get(bid, 0),
-                    reading_progress=int(nb.get("readingProgress", 0) or 0),
-                    note_count=int(nb.get("noteCount", 0) or 0),
-                    review_count=int(nb.get("reviewCount", 0) or 0),
-                )
-                # 4) Highlights (划线) and thoughts (想法) per book.
-                if int(nb.get("noteCount", 0) or 0) > 0:
-                    counts["bookmarks"] += _pull_bookmarks(client, session, bid, counts)
-                if int(nb.get("reviewCount", 0) or 0) > 0:
-                    counts["reviews"] += _pull_reviews(client, session, bid, counts)
-
-            # 5) Recommendations.
-            try:
-                rec = client.recommend(count=12)
-                rec_books = rec.get("books", []) or []
-                for b in rec_books:
-                    if b.get("bookId"):
-                        repo.upsert_book(
-                            session, b["bookId"], title=b.get("title"), author=b.get("author"),
-                            cover=b.get("cover"), category=b.get("category"), intro=b.get("intro"),
-                        )
-                counts["recs"] = repo.save_recommendations(session, pull_date, rec_books)
-            except Exception as exc:  # recommendations are non-essential
-                logger.warning("recommendations failed: %s", exc)
-                counts["errors"] += 1
-
-            repo.finish_pull(session, run, ok=True, counts=counts)
-            logger.info("pull complete: %s", counts)
+            rec = client.recommend(count=12)
+            rec_books = rec.get("books", []) or []
+            for b in rec_books:
+                if b.get("bookId"):
+                    repo.upsert_book(
+                        session, b["bookId"], title=b.get("title"), author=b.get("author"),
+                        cover=b.get("cover"), category=b.get("category"), intro=b.get("intro"),
+                    )
+            counts["recs"] = repo.save_recommendations(session, pull_date, rec_books)
         except Exception as exc:
-            logger.exception("pull failed")
-            repo.finish_pull(session, run, ok=False, counts=counts, error=str(exc))
-            raise
+            logger.warning("recommendations failed: %s", exc)
+            counts["errors"] += 1
 
 
 def _str(value: Any) -> str:
