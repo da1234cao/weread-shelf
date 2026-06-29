@@ -121,7 +121,6 @@ def _render(request: Request, name: str, **ctx):
     base = {
         "nav": {"show_overview": s.show_overview, "show_discover": s.show_discover},
         "cur_user": _current(request),
-        "tz": s.timezone,
     }
     return templates.TemplateResponse(request, name, {**base, **ctx})
 

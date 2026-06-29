@@ -12,7 +12,7 @@ from . import fixtures as fx
 
 
 def test_normalize_monthly_metrics_and_distribution():
-    p = stats.normalize("monthly", stats.base_time_for("monthly", 0), fx.MONTHLY)
+    p = stats.normalize("monthly", fx.MONTHLY)
     assert p["total_read_time"] == 12600
     assert p["read_days"] == 3
     assert p["day_average"] == 4200
@@ -26,19 +26,19 @@ def test_normalize_monthly_metrics_and_distribution():
 
 
 def test_normalize_weekly_has_no_readstat():
-    p = stats.normalize("weekly", stats.base_time_for("weekly", 0), fx.WEEKLY)
+    p = stats.normalize("weekly", fx.WEEKLY)
     assert p["read_stat"] == []
     assert p["dist_unit"] == "minutes"
 
 
 def test_normalize_annually_is_hours():
-    p = stats.normalize("annually", stats.base_time_for("annually", 0), fx.ANNUALLY)
+    p = stats.normalize("annually", fx.ANNUALLY)
     assert p["dist_unit"] == "hours"
     assert len(p["distribution"]) == 2
 
 
 def test_normalize_overall_trims_zero_years_and_keeps_prefs():
-    p = stats.normalize("overall", 0, fx.OVERALL)
+    p = stats.normalize("overall", fx.OVERALL)
     assert p["distribution"] == [{"label": "2020", "seconds": 677539}]
     assert p["dist_unit"] == "hours"
     assert p["prefer_category"] and p["prefer_author"]

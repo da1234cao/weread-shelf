@@ -157,7 +157,7 @@ def _fetch_period(
         counts["errors"] += 1
         return None
     with session_scope() as session:
-        repo.upsert_period_stat(session, mode, base_time, stats.normalize(mode, base_time, data))
+        repo.upsert_period_stat(session, mode, base_time, stats.normalize(mode, data))
     counts["stats"] += 1
     return data
 

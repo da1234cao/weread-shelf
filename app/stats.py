@@ -88,7 +88,7 @@ def _dist_label(mode: str, ts: int) -> str:
     return d[5:]                   # MM-DD
 
 
-def normalize(mode: str, base_time: int, data: dict[str, Any]) -> dict[str, Any]:
+def normalize(mode: str, data: dict[str, Any]) -> dict[str, Any]:
     """Turn a /readdata/detail response into the stored, display-ready payload.
 
     Holds only time-independent data; the relative label and prev/next live-compute
