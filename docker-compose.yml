@@ -1,7 +1,9 @@
 services:
   weread-shelf:
-    build: .
-    image: weread-shelf:latest
+    image: registry.gitlab.com/da1234cao/weread-shelf:latest
+    # To build from source instead, uncomment the next line and run
+    # `docker compose up -d --build`.
+    # build: .
     container_name: weread-shelf
     restart: unless-stopped
     ports:
