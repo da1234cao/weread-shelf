@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a9b49"/>
+      <stop offset="1" stop-color="#2f7d3a"/>
+    </linearGradient>
+  </defs>
+
+  <!-- rounded-square backdrop -->
+  <rect x="0" y="0" width="512" height="512" rx="116" ry="116" fill="url(#bg)"/>
+
+  <!-- open book -->
+  <g fill="#ffffff">
+    <!-- left page -->
+    <path d="M256 196
+             C 210 172, 148 172, 116 192
+             L 116 322
+             C 148 302, 210 302, 256 326 Z"/>
+    <!-- right page -->
+    <path d="M256 196
+             C 302 172, 364 172, 396 192
+             L 396 322
+             C 364 302, 302 302, 256 326 Z"/>
+  </g>
+
+  <!-- spine -->
+  <path d="M256 196 L256 326" fill="none" stroke="#cfe3d4" stroke-width="6" stroke-linecap="round"/>
+
+  <!-- ascending trend line across the pages -->
+  <polyline points="150,288 200,262 248,272 304,238 360,210"
+            fill="none" stroke="#2f7d3a" stroke-width="9"
+            stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="#2f7d3a">
+    <circle cx="150" cy="288" r="9"/>
+    <circle cx="200" cy="262" r="9"/>
+    <circle cx="248" cy="272" r="9"/>
+    <circle cx="304" cy="238" r="9"/>
+    <circle cx="360" cy="210" r="9"/>
+  </g>
+</svg>

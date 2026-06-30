@@ -8,6 +8,9 @@
 
 本项目由 AI 编码生成，用于每天自动拉取自己的微信读书数据，存进本地 SQLite，并以一个自托管的 Web 看板展示阅读时长曲线、书架、笔记/划线、个性化推荐。
 
+![书架看板](./doc/screenshots/shelf.png)
+
+![书架笔记](./doc/screenshots/notes.png)
 
 ## 数据来源：官方 Agent API Gateway
 

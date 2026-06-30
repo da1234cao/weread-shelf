@@ -10,7 +10,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -84,6 +84,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="weread-shelf", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+
+@app.get("/favicon.ico")
+def favicon():
+    """Serve the bundled icon for browsers' implicit /favicon.ico request."""
+    return FileResponse(BASE_DIR / "static" / "favicon.png", media_type="image/png")
 
 
 # --------------------------------------------------------------------------
