@@ -231,6 +231,36 @@ def prune_snapshots(session: Session, cutoff_dt: datetime) -> int:
     ).rowcount
 
 
+def clean_orphaned_chapters(session: Session) -> int:
+    """Delete chapters for books no longer referenced by shelf or recommendations.
+
+    A book's table of contents is worth keeping only when the user can still reach
+    it — from the shelf or the current discover page.  Books that only have
+    highlights/reviews keep their chapters so the notes detail page can still show
+    chapter titles alongside the marked passages.
+    """
+    keep_book_ids = set(session.exec(select(ShelfItem.book_id)).all())
+    keep_book_ids.update(session.exec(select(Recommendation.book_id)).all())
+    keep_book_ids.update(
+        session.exec(select(Bookmark.book_id).where(Bookmark.book_id.not_in(keep_book_ids))).all()
+    )
+    keep_book_ids.update(
+        session.exec(select(Review.book_id).where(Review.book_id.not_in(keep_book_ids))).all()
+    )
+
+    orphan_book_ids = session.exec(
+        select(Chapter.book_id).where(Chapter.book_id.not_in(keep_book_ids))
+    ).all()
+
+    if not orphan_book_ids:
+        return 0
+
+    result = session.exec(
+        delete(Chapter).where(Chapter.book_id.in_(orphan_book_ids))
+    )
+    return result.rowcount
+
+
 # --------------------------------------------------------------------------
 # Read side (used by the web layer)
 # --------------------------------------------------------------------------

@@ -76,7 +76,7 @@ def run_daily_pull(client: WeReadClient | None = None, kind: str = "daily") -> d
     client = client or WeReadClient()
     counts: dict[str, int] = {
         "stats": 0, "shelf": 0, "books": 0, "books_info": 0, "chapters": 0,
-        "bookmarks": 0, "reviews": 0, "recs": 0, "pruned": 0, "errors": 0,
+        "bookmarks": 0, "reviews": 0, "recs": 0, "pruned": 0, "cleaned": 0, "errors": 0,
     }
     pull_date = today_str()
     with session_scope() as session:
@@ -92,6 +92,7 @@ def run_daily_pull(client: WeReadClient | None = None, kind: str = "daily") -> d
         _enrich_book_info(client, counts)  # /book/info metadata, write-once per book
         _enrich_chapters(client, counts)   # /book/chapterinfo table of contents
         _prune_old_data(counts)            # trim old snapshots per retention setting
+        _clean_orphaned_chapters(counts)   # remove chapters for books no longer referenced
     except Exception as exc:
         error = str(exc)
         logger.exception("%s pull failed", kind)
@@ -103,6 +104,7 @@ def run_daily_pull(client: WeReadClient | None = None, kind: str = "daily") -> d
             repo.finish_pull(session, session.get(PullRun, run_id),
                              ok=not error, counts=counts, error=error)
         _record_suggested_version(getattr(client, "upgrade_info", None))
+        _wal_checkpoint()
 
     logger.info("pull complete: %s", counts)
     return counts
@@ -315,6 +317,21 @@ def _prune_old_data(counts: dict[str, int]) -> None:
         logger.info("pruned %d pull-run rows older than %d days", counts["pruned"], days)
 
 
+def _clean_orphaned_chapters(counts: dict[str, int]) -> None:
+    """Delete chapter rows for books no longer reachable by the user.
+
+    A book keeps its chapters when it appears on the shelf, in the current
+    recommendations, or has at least one highlight/review (so the notes detail
+    page can still show chapter titles).  Everything else — typically books that
+    rotated out of the recommendation list — is removed.
+    """
+    with session_scope() as session:
+        n = repo.clean_orphaned_chapters(session)
+    counts["cleaned"] = n
+    if n:
+        logger.info("cleaned %d orphaned chapter rows", n)
+
+
 def _record_suggested_version(upgrade_info: Any) -> None:
     """If the gateway suggested a newer skill_version, store it for the admin hint."""
     if not upgrade_info:
@@ -330,6 +347,21 @@ def _record_suggested_version(upgrade_info: Any) -> None:
         suggested = str(upgrade_info)[:40]
     if suggested and suggested != settings_store.get().suggested_skill_version:
         settings_store.save(suggested_skill_version=suggested)
+
+
+def _wal_checkpoint() -> None:
+    """Truncate the WAL so the database file doesn't appear bloated to the OS."""
+    import sqlite3
+
+    from .db import get_engine
+
+    try:
+        engine = get_engine()
+        raw = engine.pool.connect().connection
+        raw.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        raw.close()
+    except Exception:
+        logger.warning("WAL checkpoint failed", exc_info=True)
 
 
 def _fetch_all_notebooks(client: WeReadClient) -> list[dict[str, Any]]:
