@@ -62,19 +62,19 @@ def upsert_book(session: Session, book_id: str, **fields: Any) -> None:
 
 
 def save_shelf(session: Session, pull_date: str, items: list[dict[str, Any]]) -> int:
-    """Replace shelf membership snapshot for a pull_date."""
-    session.exec(delete(ShelfItem).where(ShelfItem.pull_date == pull_date))
+    """Upsert current shelf membership. Books no longer in the response are removed."""
+    api_ids = {it["book_id"] for it in items}
+    db_ids = set(session.exec(select(ShelfItem.book_id)).all())
+    for bid in db_ids - api_ids:
+        session.delete(session.get(ShelfItem, bid))
     for it in items:
-        session.add(
-            ShelfItem(
-                pull_date=pull_date,
-                book_id=it["book_id"],
-                archive_name=it.get("archive_name", ""),
-                finish_reading=int(it.get("finish_reading", 0) or 0),
-                secret=int(it.get("secret", 0) or 0),
-                update_time=int(it.get("update_time", 0) or 0),
-            )
-        )
+        row = session.get(ShelfItem, it["book_id"]) or ShelfItem(book_id=it["book_id"])
+        row.pull_date = pull_date
+        row.archive_name = it.get("archive_name", "")
+        row.finish_reading = int(it.get("finish_reading", 0) or 0)
+        row.secret = int(it.get("secret", 0) or 0)
+        row.update_time = int(it.get("update_time", 0) or 0)
+        session.add(row)
     return len(items)
 
 
@@ -135,18 +135,12 @@ def book_ids_needing_info(session: Session) -> list[str]:
 
 
 def _latest_shelf_update_times(session: Session) -> dict[str, int]:
-    """Per-book `updateTime` from the most recent shelf snapshot.
+    """Per-book ``updateTime`` from the current shelf.
 
     The shelf's updateTime equals a book's chapterUpdateTime, so it tells us — for
     free, no extra call — when a book's chapters changed since our last TOC fetch.
     """
-    latest = session.exec(
-        select(ShelfItem.pull_date).order_by(ShelfItem.pull_date.desc())
-    ).first()
-    if not latest:
-        return {}
-    items = session.exec(select(ShelfItem).where(ShelfItem.pull_date == latest)).all()
-    return {it.book_id: it.update_time for it in items}
+    return {it.book_id: it.update_time for it in session.exec(select(ShelfItem)).all()}
 
 
 def book_chapter_fetch_targets(session: Session) -> list[str]:
@@ -192,7 +186,8 @@ def replace_chapters(session: Session, book_id: str, chapters: list[dict[str, An
 
 
 def save_recommendations(session: Session, pull_date: str, books: list[dict[str, Any]]) -> int:
-    session.exec(delete(Recommendation).where(Recommendation.pull_date == pull_date))
+    """Replace the current recommendation set wholesale."""
+    session.exec(delete(Recommendation))
     for b in books or []:
         bid = b.get("bookId")
         if not bid:
@@ -226,33 +221,14 @@ def finish_pull(session: Session, run: PullRun, ok: bool, counts: dict[str, int]
     session.add(run)
 
 
-def prune_snapshots(session: Session, cutoff_date: str, cutoff_dt: datetime) -> int:
-    """Delete append-only snapshot rows older than the cutoff, returning how many.
-
-    Only the unbounded-growth tables are touched — dated shelf/recommendation
-    snapshots and the pull-run log. Per-period stats, highlights, reviews and
-    book/chapter metadata are never pruned. Each series' most recent entry is always
-    kept (even if older than the cutoff), so the dashboard never reads an empty set.
-    """
-    removed = 0
-
-    # One snapshot per pull_date; keep the newest pull_date.
-    for model in (ShelfItem, Recommendation):
-        latest = session.exec(select(model.pull_date).order_by(model.pull_date.desc())).first()
-        if latest:
-            removed += session.exec(
-                delete(model).where(model.pull_date < cutoff_date, model.pull_date < latest)
-            ).rowcount
-
-    # pull_run is an event log keyed by started_at; keep the latest run and the
-    # latest successful run (both are read by the dashboard / refresh status).
+def prune_snapshots(session: Session, cutoff_dt: datetime) -> int:
+    """Delete old pull-run log rows, keeping the latest and latest-successful runs."""
     keep = {r.id for r in (latest_pull(session), last_pull(session)) if r is not None}
-    if keep:
-        removed += session.exec(
-            delete(PullRun).where(PullRun.started_at < cutoff_dt, PullRun.id.not_in(keep))
-        ).rowcount
-
-    return removed
+    if not keep:
+        return 0
+    return session.exec(
+        delete(PullRun).where(PullRun.started_at < cutoff_dt, PullRun.id.not_in(keep))
+    ).rowcount
 
 
 # --------------------------------------------------------------------------
@@ -261,12 +237,9 @@ def prune_snapshots(session: Session, cutoff_date: str, cutoff_dt: datetime) -> 
 
 
 def current_shelf(session: Session) -> dict[str, Any]:
-    latest = session.exec(
-        select(ShelfItem.pull_date).order_by(ShelfItem.pull_date.desc())
-    ).first()
-    if not latest:
-        return {"pull_date": None, "groups": []}
-    items = session.exec(select(ShelfItem).where(ShelfItem.pull_date == latest)).all()
+    items = session.exec(select(ShelfItem)).all()
+    if not items:
+        return {"pull_date": None, "groups": [], "total": 0}
     books = {b.book_id: b for b in session.exec(select(Book)).all()}
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for it in items:
@@ -278,14 +251,13 @@ def current_shelf(session: Session) -> dict[str, Any]:
                 "author": b.author if b else "",
                 "cover": b.cover if b else "",
                 "progress": b.reading_progress if b else 0,
-                # The shelf snapshot's finish_reading is the authoritative per-user
-                # "已读完" flag (finishReading); don't fall back to Book.finished.
                 "finished": it.finish_reading,
             }
         )
     ordered = sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+    pull_date = max(it.pull_date for it in items)
     return {
-        "pull_date": latest,
+        "pull_date": pull_date,
         "total": len(items),
         "groups": [{"name": name, "books": bs} for name, bs in ordered],
     }
@@ -371,14 +343,7 @@ def book_chapters(session: Session, book_id: str) -> list[Chapter]:
 
 
 def current_recommendations(session: Session) -> list[Recommendation]:
-    latest = session.exec(
-        select(Recommendation.pull_date).order_by(Recommendation.pull_date.desc())
-    ).first()
-    if not latest:
-        return []
-    return session.exec(
-        select(Recommendation).where(Recommendation.pull_date == latest)
-    ).all()
+    return session.exec(select(Recommendation)).all()
 
 
 def last_pull(session: Session) -> PullRun | None:

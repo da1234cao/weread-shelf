@@ -94,7 +94,7 @@ python cli.py probe /readdata/detail -p mode=overall   # 调试单个接口
 `archive`（分组文件夹，含 `name` 与 `bookIds`）、`albums`（听书）、`mp`（公众号）。
 
 > 本项目用法：主同步第二步拉取，**无参数**。用 `archive` 建 `book_id → 分组名` 映射，`books` 逐本 upsert 基本信息，
-> 并把每本的 `finishReading/secret/updateTime` 存为当日书架快照。`albums`(听书)/`mp`(公众号) 暂未使用。
+> 并把每本的 `finishReading/secret/updateTime` 存为当前书架数据。`albums`(听书)/`mp`(公众号) 暂未使用。
 > 也用作 `/admin` 保存 API Key 时的连通性自检调用。
 
 ### 7. `/book/info` ✅
@@ -153,7 +153,7 @@ python cli.py probe /readdata/detail -p mode=overall   # 调试单个接口
 
 **返回字段**：`books`（含 `bookId`/`title`/`author`/`cover`/`category`/`intro`）。
 
-> 本项目用法：主同步最后一步，按 `count=12` 拉一页"为你推荐"存当日快照；推荐书也会 upsert 进书籍表。
+> 本项目用法：主同步最后一步，按 `count=12` 拉一页"为你推荐"存为当前推荐；推荐书也会 upsert 进书籍表。
 > 属**非关键步骤**——失败只计 `errors` 并继续，不中断整次同步。
 
 ---

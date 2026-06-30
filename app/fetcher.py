@@ -304,20 +304,15 @@ def _enrich_chapters(client: WeReadClient, counts: dict[str, int]) -> None:
 
 
 def _prune_old_data(counts: dict[str, int]) -> None:
-    """Delete snapshot rows older than the configured retention window (0 = off).
-
-    Compares against a local-tz cutoff date for the dated tables and a UTC cutoff
-    for pull_run's timestamp. Notes and the reading-time series are never pruned.
-    """
+    """Delete old pull-run rows older than the configured retention window (0 = off)."""
     days = settings_store.get().retention_days
     if days <= 0:
         return
-    cutoff_date = (datetime.now(tzinfo()).date() - timedelta(days=days)).strftime("%Y-%m-%d")
     cutoff_dt = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
     with session_scope() as session:
-        counts["pruned"] = repo.prune_snapshots(session, cutoff_date, cutoff_dt)
+        counts["pruned"] = repo.prune_snapshots(session, cutoff_dt)
     if counts["pruned"]:
-        logger.info("pruned %d snapshot rows older than %s", counts["pruned"], cutoff_date)
+        logger.info("pruned %d pull-run rows older than %d days", counts["pruned"], days)
 
 
 def _record_suggested_version(upgrade_info: Any) -> None:

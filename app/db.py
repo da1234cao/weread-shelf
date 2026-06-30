@@ -77,6 +77,49 @@ def _migrate(engine) -> None:
         if settings_cols and "show_footer_credit" not in settings_cols:
             conn.exec_driver_sql("ALTER TABLE app_settings ADD COLUMN show_footer_credit BOOLEAN NOT NULL DEFAULT 1")
 
+        # Migrate shelf_item / recommendation from composite-PK snapshots to
+        # single-PK upsert tables (book_id only). Keeps the latest row per book.
+        _migrate_dedup_pk(conn, "shelf_item", "book_id", "pull_date")
+        _migrate_dedup_pk(conn, "recommendation", "book_id", "pull_date")
+
+
+def _migrate_dedup_pk(conn, table: str, new_pk: str, date_col: str) -> None:
+    """Rebuild *table* so *new_pk* is its sole primary key.
+
+    Detects the old composite-PK schema by checking whether *date_col* is still
+    part of the PK. When it is, keeps only the latest row per *new_pk*.
+    """
+    pk_cols = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})") if row[5]}
+    if date_col not in pk_cols:
+        return  # already migrated or never had the old schema
+
+    # Sniff all column definitions from the live table so the new one matches
+    # the current model exactly (including any columns added later).
+    col_defs = []
+    for row in conn.exec_driver_sql(f"PRAGMA table_info({table})"):
+        name, ctype, notnull, dflt = row[1], row[2], row[3], row[4]
+        constraints = []
+        if name == new_pk:
+            constraints.append("PRIMARY KEY")
+        if notnull and name != new_pk:  # PK implies NOT NULL
+            constraints.append("NOT NULL")
+        if dflt is not None:
+            constraints.append(f"DEFAULT {dflt}")
+        col_defs.append(f"{name} {ctype} {' '.join(constraints)}".strip())
+
+    tmp = f"{table}_migrate_tmp"
+    conn.exec_driver_sql(f"CREATE TABLE {tmp} ({', '.join(col_defs)})")
+
+    # Keep only the latest row per new_pk (correlated subquery, works for any row count).
+    conn.exec_driver_sql(
+        f"INSERT INTO {tmp} SELECT * FROM {table} AS t1"
+        f"  WHERE t1.{new_pk} IS NOT NULL AND t1.{new_pk} != ''"
+        f"    AND t1.{date_col} = (SELECT MAX(t2.{date_col}) FROM {table} AS t2 WHERE t2.{new_pk} = t1.{new_pk})"
+    )
+
+    conn.exec_driver_sql(f"DROP TABLE {table}")
+    conn.exec_driver_sql(f"ALTER TABLE {tmp} RENAME TO {table}")
+
 
 @contextmanager
 def session_scope() -> Iterator[Session]:

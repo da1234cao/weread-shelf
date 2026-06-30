@@ -1,7 +1,8 @@
 """SQLModel table definitions.
 
-Design centres on *dated snapshots* so long-term trends can be derived — the
-value a daily pull adds over the WeRead app itself.
+Bounded tables (period_stat, book, bookmark, review, chapter) use upsert/overwrite
+semantics. Shelf membership and recommendations track only current state — each
+pull replaces the previous set wholesale to keep storage constant.
 """
 
 from __future__ import annotations
@@ -65,12 +66,12 @@ class Book(SQLModel, table=True):
 
 
 class ShelfItem(SQLModel, table=True):
-    """Dated snapshot of shelf membership (lets us track shelf changes)."""
+    """Current shelf membership — upserted per book, with a last-seen date."""
 
     __tablename__ = "shelf_item"
 
-    pull_date: str = Field(primary_key=True)
     book_id: str = Field(primary_key=True)
+    pull_date: str = ""
     archive_name: str = ""
     finish_reading: int = 0
     secret: int = 0
@@ -132,12 +133,12 @@ class Chapter(SQLModel, table=True):
 
 
 class Recommendation(SQLModel, table=True):
-    """Dated snapshot of personalized recommendations (latest = current)."""
+    """Current personalized recommendations — replaced wholesale on each pull."""
 
     __tablename__ = "recommendation"
 
-    pull_date: str = Field(primary_key=True)
     book_id: str = Field(primary_key=True)
+    pull_date: str = ""
     title: str = ""
     author: str = ""
     cover: str = ""
@@ -166,9 +167,8 @@ class AppSettings(SQLModel, table=True):
     show_footer_credit: bool = True
     require_user_auth: bool = False
     pull_interval_hours: int = 24
-    # Snapshot retention window in days (0 = keep forever). Pulls older than this
-    # are pruned from the append-only snapshot tables; each series' latest is always
-    # kept. See repository.prune_snapshots.
+    # Pull-run log retention in days (0 = keep forever). Pull records older than
+    # this are deleted; the latest and latest-successful runs are always kept.
     retention_days: int = 0
     # Seconds between successive gateway calls in a pull (politeness / rate limit).
     gateway_interval: float = 0.2
