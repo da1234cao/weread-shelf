@@ -351,15 +351,13 @@ def _record_suggested_version(upgrade_info: Any) -> None:
 
 def _wal_checkpoint() -> None:
     """Truncate the WAL so the database file doesn't appear bloated to the OS."""
-    import sqlite3
-
     from .db import get_engine
 
     try:
         engine = get_engine()
-        raw = engine.pool.connect().connection
-        raw.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        raw.close()
+        with engine.connect() as conn:
+            conn.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.commit()
     except Exception:
         logger.warning("WAL checkpoint failed", exc_info=True)
 
