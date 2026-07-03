@@ -4,7 +4,10 @@ All operations hit a single endpoint:
 
     POST https://i.weread.qq.com/api/agent/gateway
     Authorization: Bearer wrk-xxxx
-    body: {"api_name": "/path", "skill_version": "1.0.3", ...flat params}
+    body: {"api_name": "/path", "skill_version": "<auto>", ...flat params}
+
+If the gateway returns an ``upgrade_info`` block with a newer ``skill_version``,
+the client auto-updates its version and persists it so the next call uses it.
 
 Errors are returned as a JSON body with a non-zero ``errcode`` (often with an
 HTTP status of 499). Reading-duration fields are always in *seconds*.
@@ -66,8 +69,6 @@ class WeReadClient:
         self._owns_client = client is None
         self._client = client or httpx.Client(timeout=self.settings.request_timeout)
         self._last_call_ts = 0.0
-        # Latest non-empty upgrade_info the gateway returned this session.
-        self.upgrade_info: Any = None
 
     # -- lifecycle ---------------------------------------------------------
     def close(self) -> None:
@@ -109,8 +110,7 @@ class WeReadClient:
 
             data = self._parse(resp, api_name)
             self._check_errors(data, api_name)
-            if data.get("upgrade_info"):
-                self.upgrade_info = data["upgrade_info"]
+            self._auto_update_version(data.get("upgrade_info"))
             return data
 
     # -- typed helpers -----------------------------------------------------
@@ -173,11 +173,30 @@ class WeReadClient:
 
     @staticmethod
     def _check_errors(data: dict[str, Any], api_name: str) -> None:
-        if data.get("upgrade_info"):
-            logger.warning("gateway requests skill upgrade for %s: %s", api_name, data["upgrade_info"])
         errcode = data.get("errcode")
         if errcode is not None and errcode != 0:
             errmsg = str(data.get("errmsg", ""))
             if errcode in _AUTH_ERRCODES:
                 raise WeReadAuthError(errcode, errmsg, api_name)
             raise WeReadError(errcode, errmsg, api_name)
+
+    def _auto_update_version(self, upgrade_info: Any) -> None:
+        """If the gateway suggests a newer skill_version, adopt it immediately."""
+        if not upgrade_info:
+            return
+        version = self._extract_version(upgrade_info)
+        if version and version != self.skill_version:
+            old = self.skill_version
+            self.skill_version = version
+            settings_store.save(skill_version=version)
+            logger.info("skill_version auto-updated: %s -> %s", old, version)
+
+    @staticmethod
+    def _extract_version(upgrade_info: Any) -> str:
+        """Pull a version string from the gateway's upgrade_info dict."""
+        if isinstance(upgrade_info, dict):
+            for key in ("latest_version", "skill_version", "version", "latest", "latestVersion", "suggest_version"):
+                if upgrade_info.get(key):
+                    return str(upgrade_info[key])
+            return str(upgrade_info)[:40] if upgrade_info else ""
+        return str(upgrade_info)[:40]

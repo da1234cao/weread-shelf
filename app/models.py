@@ -159,8 +159,6 @@ class AppSettings(SQLModel, table=True):
     id: int = Field(default=1, primary_key=True)
     api_key: str = ""
     skill_version: str = "1.0.3"
-    # Version the gateway last suggested upgrading to (via upgrade_info).
-    suggested_skill_version: str = ""
     show_overview: bool = True
     show_discover: bool = True
     # Show the "built on weread-shelf" credit line in the page footer.

@@ -235,11 +235,10 @@ def admin_home(request: Request):
     with session_scope() as session:
         users = repo.list_users(session)
         last = repo.last_pull(session)
-    upgrade = bool(s.suggested_skill_version and s.suggested_skill_version != s.skill_version)
     timezones = COMMON_TIMEZONES if s.timezone in COMMON_TIMEZONES else [s.timezone, *COMMON_TIMEZONES]
     return _render(
         request, "admin.html",
-        s=s, users=users, last_pull=last, upgrade_available=upgrade,
+        s=s, users=users, last_pull=last,
         must_change=user.must_change, saved=request.query_params.get("saved"),
         has_key=bool(s.api_key), timezones=timezones, retention_choices=RETENTION_CHOICES,
     )

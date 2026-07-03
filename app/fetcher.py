@@ -103,7 +103,6 @@ def run_daily_pull(client: WeReadClient | None = None, kind: str = "daily") -> d
         with session_scope() as session:
             repo.finish_pull(session, session.get(PullRun, run_id),
                              ok=not error, counts=counts, error=error)
-        _record_suggested_version(getattr(client, "upgrade_info", None))
         _wal_checkpoint()
 
     logger.info("pull complete: %s", counts)
@@ -330,23 +329,6 @@ def _clean_orphaned_chapters(counts: dict[str, int]) -> None:
     counts["cleaned"] = n
     if n:
         logger.info("cleaned %d orphaned chapter rows", n)
-
-
-def _record_suggested_version(upgrade_info: Any) -> None:
-    """If the gateway suggested a newer skill_version, store it for the admin hint."""
-    if not upgrade_info:
-        return
-    suggested = ""
-    if isinstance(upgrade_info, dict):
-        for key in ("skill_version", "version", "latest", "latestVersion", "suggest_version"):
-            if upgrade_info.get(key):
-                suggested = str(upgrade_info[key])
-                break
-        suggested = suggested or str(upgrade_info)[:40]
-    else:
-        suggested = str(upgrade_info)[:40]
-    if suggested and suggested != settings_store.get().suggested_skill_version:
-        settings_store.save(suggested_skill_version=suggested)
 
 
 def _wal_checkpoint() -> None:
