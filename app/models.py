@@ -173,6 +173,9 @@ class AppSettings(SQLModel, table=True):
     # Flips True once the first full historical stats backfill has completed.
     stats_backfilled: bool = False
     timezone: str = "Asia/Shanghai"
+    # Self-healing: when enabled, a background thread probes /api/shelf every
+    # 60 s; 5 consecutive 500s trigger os._exit(1) so the container restarts.
+    health_monitor_enabled: bool = True
     # Random secret for signing session cookies (generated on first run).
     session_secret: str = ""
     updated_at: datetime = Field(default_factory=_utcnow)

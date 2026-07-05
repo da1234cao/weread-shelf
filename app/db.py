@@ -76,6 +76,8 @@ def _migrate(engine) -> None:
             conn.exec_driver_sql("ALTER TABLE app_settings ADD COLUMN stats_backfilled BOOLEAN NOT NULL DEFAULT 0")
         if settings_cols and "show_footer_credit" not in settings_cols:
             conn.exec_driver_sql("ALTER TABLE app_settings ADD COLUMN show_footer_credit BOOLEAN NOT NULL DEFAULT 1")
+        if settings_cols and "health_monitor_enabled" not in settings_cols:
+            conn.exec_driver_sql("ALTER TABLE app_settings ADD COLUMN health_monitor_enabled BOOLEAN NOT NULL DEFAULT 1")
 
         # Migrate shelf_item / recommendation from composite-PK snapshots to
         # single-PK upsert tables (book_id only). Keeps the latest row per book.

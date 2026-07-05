@@ -49,6 +49,7 @@
       <label class="check"><input type="checkbox" name="show_discover" value="true" {{ 'checked' if s.show_discover }}> 显示「发现」模块</label>
       <label class="check"><input type="checkbox" name="show_footer_credit" value="true" {{ 'checked' if s.show_footer_credit }}> 显示页脚「本站基于 weread-shelf 构建」</label>
       <label class="check"><input type="checkbox" name="require_user_auth" value="true" {{ 'checked' if s.require_user_auth }}> 普通用户访问需要登录</label>
+      <label class="check"><input type="checkbox" name="health_monitor_enabled" value="true" {{ 'checked' if s.health_monitor_enabled }}> 保活自愈（探测 /api/shelf，连续 5 分钟 500 则自动重启）</label>
       <label>拉取间隔
         <select name="pull_interval_hours">
           {% for h in [6, 12, 24] %}<option value="{{ h }}" {{ 'selected' if s.pull_interval_hours == h }}>每 {{ h }} 小时</option>{% endfor %}

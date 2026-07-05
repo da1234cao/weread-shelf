@@ -16,6 +16,7 @@ from fastapi.templating import Jinja2Templates
 
 from . import auth
 from . import fetcher
+from . import health_monitor
 from . import repository as repo
 from . import settings_store
 from . import stats
@@ -75,11 +76,13 @@ async def lifespan(app: FastAPI):
     init_db()
     _bootstrap()
     start_scheduler()
+    health_monitor.start()
     if settings_store.get().api_key and not _has_any_data():
         logger.info("no data yet; kicking off initial pull in background")
         threading.Thread(target=fetcher.run_pull_locked, args=("startup",), daemon=True).start()
     yield
     shutdown_scheduler()
+    health_monitor.stop()
 
 
 app = FastAPI(title="weread-shelf", lifespan=lifespan)
@@ -256,6 +259,7 @@ def admin_settings(
     gateway_interval: float = Form(0.2),
     timezone: str = Form("Asia/Shanghai"),
     skill_version: str = Form("1.0.3"),
+    health_monitor_enabled: bool = Form(False),
 ):
     _require_admin_ready(request)
     try:
@@ -273,6 +277,7 @@ def admin_settings(
         require_user_auth=require_user_auth, pull_interval_hours=pull_interval_hours,
         retention_days=retention_days, gateway_interval=gateway_interval,
         timezone=timezone, skill_version=(skill_version or "").strip() or "1.0.3",
+        health_monitor_enabled=health_monitor_enabled,
     )
     reschedule()
     return RedirectResponse("/admin?saved=settings", status_code=303)
