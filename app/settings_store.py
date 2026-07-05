@@ -1,8 +1,7 @@
 """Access to the single-row ``AppSettings`` config, with a small in-process cache.
 
-The app runs as one process (web + scheduler), so a module-level cache of the
-settings row is safe and lets hot paths (e.g. ``utils.tzinfo``) avoid a DB hit
-per call. ``save`` is the only writer and refreshes the cache.
+The module-level cache holds a detached copy (``model_copy()``) so it never
+references a session and can't be poisoned by a failed commit.
 """
 
 from __future__ import annotations
@@ -30,16 +29,21 @@ def _load(session) -> AppSettings:
 
 
 def get() -> AppSettings:
-    """Return the cached settings row (loading/seeding it on first use)."""
+    """Return a detached copy of the cached settings (loading/seeding on first use)."""
     global _cache
     if _cache is None:
         with session_scope() as session:
-            _cache = _load(session)
+            _cache = _load(session).model_copy()
     return _cache
 
 
 def save(**changes: Any) -> AppSettings:
-    """Apply field changes, persist, and refresh the cache."""
+    """Apply field changes, persist, and refresh the cache with a detached copy.
+
+    The cache is only updated after a successful commit, so a transaction
+    failure (e.g. a DB-lock timeout during a concurrent pull) can never leave
+    the process-wide cache pointing to an expired object.
+    """
     global _cache
     with session_scope() as session:
         row = _load(session)
@@ -47,7 +51,7 @@ def save(**changes: Any) -> AppSettings:
             setattr(row, key, value)
         row.updated_at = datetime.now(timezone.utc)
         session.add(row)
-        _cache = row
+    _cache = row.model_copy()
     return _cache
 
 
