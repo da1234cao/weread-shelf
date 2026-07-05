@@ -24,7 +24,7 @@ Content-Type: application/json
 - **所有时长字段单位为秒。**
 - 业务错误以非零 `errcode` 返回（常伴随 HTTP 499）；`errcode=0` 为成功。
 - 鉴权失效错误码：`-2001 / -2010 / -2012`（key 过期/无效/未授权）。
-- 返回体若带 `upgrade_info`，表示服务端建议升级 `skill_version`。
+- 返回体若带 `upgrade_info`，表示服务端建议升级 `skill_version`（客户端自动采用，见 [requirements.md §5.7](requirements.md#57-skill_version-自动升级)）。
 - 分页有两种风格：游标式（`synckey` / `lastSort` / `sessionId`）和偏移式（`maxIdx`）。
 
 ### 自查目录
