@@ -79,7 +79,7 @@
         上次成功拉取：{{ last_pull.finished_at | localtime }} {{ s.timezone }}（{{ last_pull.kind }}）
       {% else %}还没有成功拉取记录。{% endif %}
     </p>
-    <button class="btn-primary" onclick="refreshNow(this)">立即刷新</button>
+    <button class="btn-primary refresh-btn" onclick="refreshNow(this)">立即刷新</button>
   </div>
 
   <div class="admin-card">
